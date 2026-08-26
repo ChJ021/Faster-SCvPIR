@@ -1,0 +1,47 @@
+project_root=/home/user/small-client-pir
+upstream=https://github.com/mayank0403/Verifiable-Hintless-PIR.git
+commit=56b8b744276aa3f3c078509501200967d28cfc7b
+target=//hintless_simplepir:new_pir_test
+profile=honest-h-smoke-2mib
+bazel_version=6.5.0
+bazel_jobs=2
+bzlmod=false
+eigen_override=/home/user/small-client-pir/native/vendor/eigen-3.4.0
+eigen_archive_sha256=eba3f3d414d2f8cba2919c78ec6daab08fc71ba2ba4ae502b7e5d4d99fc02cda
+patched_client_sha256=2b24433a067a4747d3bcf210d16907a3c18eead802a05c0d8a59c69eb5b16b76
+patched_mat_sha256=2de69ab966fa322ade2bf92f405b21214ffa6e2def6d0728afdea61e453e946e
+highway_mode=native-dispatch
+clear_inherited_proxy=true
+CC=clang
+CXX=clang++
+
+Bazel test targets:
+command: env -u http_proxy -u https_proxy -u all_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY /home/user/small-client-pir/native/tools/bazel-6.5.0 --batch --output_user_root=/home/user/small-client-pir/native/cache/bazel-user query --noenable_bzlmod --override_repository=com_gitlab_libeigen-eigen=/home/user/small-client-pir/native/vendor/eigen-3.4.0 --repository_cache=/home/user/small-client-pir/native/cache/repository --color=no --curses=no tests\(//hintless_simplepir:all\)
+ checking cached actions
+Loading: 0 packages loaded
+//hintless_simplepir:new_pir_test
+Loading: 1 packages loaded
+
+GoogleTest cases in //hintless_simplepir:new_pir_test:
+command: env -u http_proxy -u https_proxy -u all_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY /home/user/small-client-pir/native/tools/bazel-6.5.0 --batch --output_user_root=/home/user/small-client-pir/native/cache/bazel-user run --noenable_bzlmod --override_repository=com_gitlab_libeigen-eigen=/home/user/small-client-pir/native/vendor/eigen-3.4.0 --jobs=2 --repository_cache=/home/user/small-client-pir/native/cache/repository --disk_cache=/home/user/small-client-pir/native/cache/disk --symlink_prefix=/home/user/small-client-pir/native/cache/symlinks/bazel- --color=no --curses=no -c opt --cxxopt=-std=c++17 --cxxopt=-w --copt=-w //hintless_simplepir:new_pir_test -- --gtest_list_tests
+INFO: Invocation ID: 30dd30f6-7d4b-4c0b-bdb5-651018bb909b
+Loading: 
+Loading: 
+Loading: 0 packages loaded
+Analyzing: target //hintless_simplepir:new_pir_test (1 packages loaded, 0 targets configured)
+INFO: Analyzed target //hintless_simplepir:new_pir_test (92 packages loaded, 3070 targets configured).
+ checking cached actions
+INFO: Found 1 target...
+[1 / 121] [Prepa] BazelWorkspaceStatusAction stable-status.txt
+Target //hintless_simplepir:new_pir_test up-to-date:
+  /home/user/small-client-pir/native/cache/symlinks/bazel-bin/hintless_simplepir/new_pir_test
+INFO: Elapsed time: 2.624s, Critical Path: 0.03s
+INFO: 1 process: 1 internal.
+INFO: Build completed successfully, 1 total action
+INFO: Running command line: external/bazel_tools/tools/test/test-setup.sh hintless_simplepir/new_pir_test --gtest_list_tests
+exec ${PAGER:-/usr/bin/less} "$0" || exit 1
+Executing tests from //hintless_simplepir:new_pir_test
+-----------------------------------------------------------------------------
+Running main() from gmock_main.cc
+HintlessSimplePir.
+  EndToEndPIRTest

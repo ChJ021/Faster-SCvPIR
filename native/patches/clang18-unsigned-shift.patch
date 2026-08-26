@@ -1,0 +1,20 @@
+diff --git a/verisimplepir/src/lib/pir/mat.cpp b/verisimplepir/src/lib/pir/mat.cpp
+index 17db5d5..928c44a 100644
+--- a/verisimplepir/src/lib/pir/mat.cpp
++++ b/verisimplepir/src/lib/pir/mat.cpp
+@@ -91,6 +91,6 @@ void error(Matrix& mat) {
+     const size_t len = mat.rows * mat.cols;
+     //auto error_norm = 0;
+-    Elem mid_pt = 1 << (sizeof(Elem)*8 - 1);
++    Elem mid_pt = Elem{1} << (sizeof(Elem)*8 - 1);
+     Elem magnitude;
+     for (size_t i = 0; i < len; i++) {
+         mat.data[i] = GaussSample<Elem>();
+@@ -110,6 +110,6 @@ void error64(Matrix64& mat) {
+     const size_t len = mat.rows * mat.cols;
+     //auto error_norm = 0;
+-    Elem64 mid_pt = 1 << (sizeof(Elem64)*8 - 1);
++    Elem64 mid_pt = Elem64{1} << (sizeof(Elem64)*8 - 1);
+     Elem64 magnitude;
+     for (size_t i = 0; i < len; i++) {
+         mat.data[i] = GaussSample<Elem64>();

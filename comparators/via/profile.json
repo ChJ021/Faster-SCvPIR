@@ -1,0 +1,10 @@
+{
+  "schema": "pir-comparator-profile-v1",
+  "protocol": "VIA",
+  "role": "phase-2-comparison-only",
+  "implementation_status": "not-integrated",
+  "runtime_benchmark_schema": "pir-comparison-reference-v0",
+  "security_model": "semi-honest-query-privacy-and-honest-correctness",
+  "source": "https://eprint.iacr.org/2025/2074",
+  "measurements": null
+}

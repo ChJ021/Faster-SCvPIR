@@ -1,0 +1,37 @@
+schema=small-client-vpir-native-environment-v1
+captured_at_utc=2026-08-24T05:12:16+00:00
+project_root=/home/cj/PIR
+upstream=https://github.com/mayank0403/Verifiable-Hintless-PIR.git
+commit=56b8b744276aa3f3c078509501200967d28cfc7b
+target=//hintless_simplepir:new_pir_test
+profile=honest-h-smoke-2mib
+bazel_version=6.5.0
+bazel_jobs=2
+bzlmod=false
+eigen_override=/home/cj/PIR/native/vendor/eigen-3.4.0
+eigen_archive_sha256=eba3f3d414d2f8cba2919c78ec6daab08fc71ba2ba4ae502b7e5d4d99fc02cda
+patched_client_sha256=2b24433a067a4747d3bcf210d16907a3c18eead802a05c0d8a59c69eb5b16b76
+patched_mat_sha256=2de69ab966fa322ade2bf92f405b21214ffa6e2def6d0728afdea61e453e946e
+highway_mode=native-dispatch
+clear_inherited_proxy=true
+CC=clang
+CXX=clang++
+uname=Linux LAPTOP-IKFOH6P7 6.6.87.2-microsoft-standard-WSL2 #1 SMP PREEMPT_DYNAMIC Thu Jun  5 18:30:46 UTC 2025 x86_64 x86_64 x86_64 GNU/Linux
+os_release=Ubuntu 24.04
+cpu_architecture=x86_64
+cpu_model=AMD Ryzen 7 5800H with Radeon Graphics
+logical_cpus=8
+memory_bytes=8328019968
+clang=Ubuntu clang version 18.1.3 (1ubuntu1)
+bazel=6.5.0
+openssl=OpenSSL 3.0.13 30 Jan 2024 (Library: OpenSSL 3.0.13 30 Jan 2024)
+upstream_status= M hintless_simplepir/client.cc; M verisimplepir/src/lib/pir/mat.cpp;
+bazel_sha256=a40ac69263440761199fcb8da47ad4e3f328cbe79ffbf4ecc14e5ba252857307
+binary_sha256=ea849bffe668b45f248735a7edeb59f72bbc4340ceeb2780c48cae1015cb5285
+package=clang	version=1:18.0-59~exp2
+package=gdb	version=15.1-1ubuntu1~24.04.1
+package=libgsl-dev	version=2.7.1+dfsg-6ubuntu2
+package=libgslcblas0	version=2.7.1+dfsg-6ubuntu2
+package=libmsgsl-dev	version=4.0.0-3
+package=libssl-dev	version=3.0.13-0ubuntu3.12
+package=pkg-config	version=1.8.1-2build1

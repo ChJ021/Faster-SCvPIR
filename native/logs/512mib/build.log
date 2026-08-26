@@ -1,0 +1,16 @@
+INFO: Invocation ID: 7d0d15d1-597a-4ee6-bfab-1cc0ef3c6c3a
+Loading: 
+Loading: 
+Loading: 0 packages loaded
+Analyzing: target //hintless_simplepir:new_pir_test (1 packages loaded, 0 targets configured)
+INFO: Analyzed target //hintless_simplepir:new_pir_test (92 packages loaded, 3070 targets configured).
+ checking cached actions
+INFO: Found 1 target...
+[0 / 121] [Prepa] BazelWorkspaceStatusAction stable-status.txt
+[1,321 / 1,323] Compiling hintless_simplepir/new_pir_test.cc; 0s remote-cache, linux-sandbox
+[1,322 / 1,323] [Prepa] Linking hintless_simplepir/new_pir_test
+Target //hintless_simplepir:new_pir_test up-to-date:
+  /home/user/small-client-pir/native/cache/symlinks/bazel-bin/hintless_simplepir/new_pir_test
+INFO: Elapsed time: 6.658s, Critical Path: 4.26s
+INFO: 3 processes: 1 internal, 2 linux-sandbox.
+INFO: Build completed successfully, 3 total actions

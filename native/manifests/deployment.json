@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "deployment_id": "small-client-vpir-upstream-honest-h-smoke",
+  "upstream": {
+    "repository": "https://github.com/mayank0403/Verifiable-Hintless-PIR.git",
+    "commit": "56b8b744276aa3f3c078509501200967d28cfc7b",
+    "target": "//hintless_simplepir:new_pir_test",
+    "license_file": "native/vendor/Verifiable-Hintless-PIR/LICENSE"
+  },
+  "toolchain": {
+    "bazel_version": "6.5.0",
+    "bazel_linux_x86_64_sha256": "a40ac69263440761199fcb8da47ad4e3f328cbe79ffbf4ecc14e5ba252857307",
+    "bzlmod_enabled": false,
+    "jobs": 2,
+    "cxx_standard": "c++17",
+    "preferred_compiler": "clang",
+    "clear_inherited_proxy_by_default": true
+  },
+  "dependency_overrides": {
+    "eigen": {
+      "version": "3.4.0",
+      "tag_commit": "3147391d946bb4b6c68edd901f2add6ac1f31f8c",
+      "archive": "native/toolchain/sources/eigen-3.4.0.zip",
+      "archive_sha256": "eba3f3d414d2f8cba2919c78ec6daab08fc71ba2ba4ae502b7e5d4d99fc02cda",
+      "local_repository": "native/vendor/eigen-3.4.0",
+      "reason": "The upstream WORKSPACE pins a stale GitLab-generated archive digest; the source tag is unchanged."
+    }
+  },
+  "compatibility_patches": [
+    {
+      "file": "native/patches/clang18-row-index-type.patch",
+      "upstream_file": "hintless_simplepir/client.cc",
+      "patched_file_sha256": "2b24433a067a4747d3bcf210d16907a3c18eead802a05c0d8a59c69eb5b16b76",
+      "reason": "C++17 rejects implicit uint64_t-to-int64_t list-initialization narrowing under Clang 18; five row end values are made explicitly int64_t.",
+      "protocol_or_parameter_change": false
+    },
+    {
+      "file": "native/patches/clang18-unsigned-shift.patch",
+      "upstream_file": "verisimplepir/src/lib/pir/mat.cpp",
+      "patched_file_sha256": "2de69ab966fa322ade2bf92f405b21214ffa6e2def6d0728afdea61e453e946e",
+      "reason": "Constructing unsigned midpoints with signed literal shifts by 31/63 is undefined behavior; typed unsigned literals preserve the intended midpoint and prevent Clang 18 miscompilation.",
+      "protocol_or_parameter_change": false
+    }
+  ],
+  "project_local_paths": {
+    "bazel_binary_directory": "native/tools",
+    "output_user_root": "native/cache/bazel-user",
+    "repository_cache": "native/cache/repository",
+    "disk_cache": "native/cache/disk",
+    "symlinks": "native/cache/symlinks",
+    "logs": "native/logs"
+  },
+  "profiles": [
+    {
+      "id": "honest-h-smoke-2mib",
+      "status": "locally-built-and-smoke-tested",
+      "enabled": true,
+      "rows": 2048,
+      "columns": 1024,
+      "record_bits": 8,
+      "logical_database_bytes": 2097152,
+      "assumption": "honest-H",
+      "purpose": "correctness and deployment smoke test"
+    },
+    {
+      "id": "paper-profile-512mib",
+      "status": "documented-not-applied",
+      "enabled": false,
+      "rows": 32768,
+      "columns": 16384,
+      "record_bits": 8,
+      "logical_database_bytes": 536870912,
+      "assumption": "honest-H",
+      "purpose": "paper-scale experiment; requires a separate reviewed parameter patch"
+    }
+  ],
+  "capabilities": {
+    "honest_h_verifiable_pir": "upstream-proof-of-concept-locally-verified",
+    "general_h_malicious_security": "not-implemented",
+    "network_transport": "not-implemented"
+  },
+  "local_verification": {
+    "date": "2026-08-24",
+    "result_manifest": "native/manifests/smoke-result-20260824.json",
+    "result_manifest_sha256": "ad6463e748a731fe930425da6ff4ad6607c666b5e088aebf5a274a6f9d0da316",
+    "environment_manifest": "native/manifests/environment-20260824T051216Z-2.txt",
+    "environment_manifest_sha256": "e0ecb713e4daa10baee385bfea9aeb409cc7fd4fe375e11082b6287f8823a483",
+    "tests_passed": 1,
+    "tests_run": 1
+  },
+  "non_claims": [
+    "This is not a production deployment.",
+    "The smoke test does not reproduce the paper's 512 MiB benchmark.",
+    "The pinned upstream code does not implement vPIR without the honest-hint assumption."
+  ]
+}

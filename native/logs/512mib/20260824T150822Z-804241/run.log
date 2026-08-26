@@ -1,0 +1,61 @@
+command: /usr/bin/time --verbose --output=/home/user/small-client-pir/native/logs/512mib/20260824T150822Z-804241/run.time.txt env -u GTEST_FILTER -u GTEST_REPEAT -u GTEST_SHUFFLE -u GTEST_TOTAL_SHARDS -u GTEST_SHARD_INDEX -u GTEST_SHARD_STATUS_FILE /home/user/small-client-pir/native/cache/symlinks/bazel-bin/hintless_simplepir/new_pir_test --gtest_filter=HintlessSimplePir.EndToEndPIRTest --gtest_repeat=1 --gtest_shuffle=0
+Running main() from gmock_main.cc
+Note: Google Test filter = HintlessSimplePir.EndToEndPIRTest
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from HintlessSimplePir
+[ RUN      ] HintlessSimplePir.EndToEndPIRTest
+Input params: N = 536870912 d = 8
+database size: 0.5 GiB
+Rows per block: 2048
+Shards: 1 and Stacks: 8
+-----   Using BSGS   -----
+
+Online LWE correctness slack success
+Offline LWE correctness slack success
+Offline SIS hardness check success
+Using static DB
+Baby steps total: 128, Giant steps total: 8
+BSGS DISTINCT rotations total (Hintless has 511; baby steps once, giant steps multiple times): 256
+Proof compression: no. of rows in Z_prime = RC = 2
+Primary verify success
+Success: (Compressed) Z in preprocessing verified and preprocessing phase done.
+[==> TIMER  <==] Total preprocessing (server + client compute) time: 717293 ms | 717.293 sec
+H*s recovered from RLWE
+H*s verify success
+[34m[==> TIMER  <==] Prepare phase (query-level preprocessing) total (client + server) time: 2232.28 ms | 2.23228 sec[0m
+Reconstructing record
+D*u verify success
+[34m[==> TIMER  <==] Query-level preprocessing + online time: 2333.57 ms | 2.33357 sec[0m
+[34m[==> TIMER  <==] Online-only (w/o prepare) phase total (client + server) time: 101.298 ms | 0.101298 sec[0m
+Row id 0 Col id 16380 stack size 8
+End-to-end test done.
+----------------------------------
+Recorded metrics
+Database size: 0.5 GiB
+Shards: 1 and Stacks: 8
+Client Local Prepr (s) : 87.5284
+Client Prepa Post Req (s) : 0.0141801
+Client Prepa Pre Req (s) : 1.90159
+Global Prepr (s) : 637.509
+Hints (MiB) : 528
+Long Term State (KiB) : 128
+Offline Down (KiB) : 5120
+Offline Up (KiB) : 10240
+Online State (KiB) : 3525
+Prep Down (KiB) : 1792
+Prep Up (Kib) : 952
+Query Down (KiB) : 157
+Query Up (KiB) : 43
+Query: Client Decryption (ms) : 0.02013
+Query: Client Req Gen (ms) : 1.62565
+Query: Client Verification (ms) : 1.85976
+Query: Server Comp (s) : 0.0977018
+Server Per-Client Prepr (s) : 6.81249
+Server Prepa Comp (s) : 0.316397
+[       OK ] HintlessSimplePir.EndToEndPIRTest (722223 ms)
+[----------] 1 test from HintlessSimplePir (722223 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (722223 ms total)
+[  PASSED  ] 1 test.

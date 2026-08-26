@@ -1,0 +1,54 @@
+diff --git a/hintless_simplepir/client.cc b/hintless_simplepir/client.cc
+index 6eefc8d..81613a5 100644
+--- a/hintless_simplepir/client.cc
++++ b/hintless_simplepir/client.cc
+@@ -233,7 +233,8 @@ absl::StatusOr<HintlessPirRequest> HintlessPirClient::GenerateRequest(
+ 
+   // Plaintext is a selection vector for col_idx
+   int64_t row_idx = index / params_.db_cols;
+-  uint64_t row_idx_end = row_idx + params_.db_stack_cells;
++  int64_t row_idx_end =
++      row_idx + static_cast<int64_t>(params_.db_stack_cells);
+   int64_t col_idx = index % params_.db_cols;
+   lwe::Vector query_vector = lwe::Vector::Zero(params_.db_cols);
+   query_vector[col_idx] = 1;
+@@ -309,7 +310,8 @@ absl::StatusOr<HintlessPirRequest> HintlessPirClient::GenerateRequestPatched(
+ 
+   // Plaintext is a selection vector for col_idx
+   int64_t row_idx = index / params_.db_cols;
+-  uint64_t row_idx_end = row_idx + params_.db_stack_cells;
++  int64_t row_idx_end =
++      row_idx + static_cast<int64_t>(params_.db_stack_cells);
+   int64_t col_idx = index % params_.db_cols;
+   lwe::Vector query_vector = lwe::Vector::Zero(params_.db_cols);
+   query_vector[col_idx] = 1;
+@@ -408,7 +410,8 @@ absl::StatusOr<HintlessPirRequest> HintlessPirClient::GenerateRequestBSGS(
+ 
+   // Plaintext is a selection vector for col_idx
+   int64_t row_idx = index / params_.db_cols;
+-  uint64_t row_idx_end = row_idx + params_.db_stack_cells;
++  int64_t row_idx_end =
++      row_idx + static_cast<int64_t>(params_.db_stack_cells);
+   int64_t col_idx = index % params_.db_cols;
+   lwe::Vector query_vector = lwe::Vector::Zero(params_.db_cols);
+   query_vector[col_idx] = 1;
+@@ -484,7 +487,8 @@ absl::StatusOr<HintlessPirRequest> HintlessPirClient::GenerateRequestBSGSPatched(
+ 
+   // Plaintext is a selection vector for col_idx
+   int64_t row_idx = index / params_.db_cols;
+-  uint64_t row_idx_end = row_idx + params_.db_stack_cells;
++  int64_t row_idx_end =
++      row_idx + static_cast<int64_t>(params_.db_stack_cells);
+   int64_t col_idx = index % params_.db_cols;
+   lwe::Vector query_vector = lwe::Vector::Zero(params_.db_cols);
+   query_vector[col_idx] = 1;
+@@ -612,7 +616,8 @@ absl::StatusOr<HintlessPirRequest> HintlessPirClient::GenerateRequestNew(
+ 
+   // Plaintext is a selection vector for col_idx
+   int64_t row_idx = index / params_.db_cols;
+-  uint64_t row_idx_end = row_idx + params_.db_stack_cells;
++  int64_t row_idx_end =
++      row_idx + static_cast<int64_t>(params_.db_stack_cells);
+   int64_t col_idx = index % params_.db_cols;
+   lwe::Vector query_vector = lwe::Vector::Zero(params_.db_cols);
+   query_vector[col_idx] = 1;

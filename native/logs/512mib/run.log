@@ -1,0 +1,60 @@
+Running main() from gmock_main.cc
+Note: Google Test filter = HintlessSimplePir.EndToEndPIRTest
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from HintlessSimplePir
+[ RUN      ] HintlessSimplePir.EndToEndPIRTest
+Input params: N = 536870912 d = 8
+database size: 0.5 GiB
+Rows per block: 2048
+Shards: 1 and Stacks: 8
+-----   Using BSGS   -----
+
+Online LWE correctness slack success
+Offline LWE correctness slack success
+Offline SIS hardness check success
+Using static DB
+Baby steps total: 128, Giant steps total: 8
+BSGS DISTINCT rotations total (Hintless has 511; baby steps once, giant steps multiple times): 256
+Proof compression: no. of rows in Z_prime = RC = 2
+Primary verify success
+Success: (Compressed) Z in preprocessing verified and preprocessing phase done.
+[==> TIMER  <==] Total preprocessing (server + client compute) time: 723760 ms | 723.76 sec
+H*s recovered from RLWE
+H*s verify success
+[34m[==> TIMER  <==] Prepare phase (query-level preprocessing) total (client + server) time: 2242.51 ms | 2.24251 sec[0m
+Reconstructing record
+D*u verify success
+[34m[==> TIMER  <==] Query-level preprocessing + online time: 2341.46 ms | 2.34146 sec[0m
+[34m[==> TIMER  <==] Online-only (w/o prepare) phase total (client + server) time: 98.9621 ms | 0.0989621 sec[0m
+Row id 0 Col id 16380 stack size 8
+End-to-end test done.
+----------------------------------
+Recorded metrics
+Database size: 0.5 GiB
+Shards: 1 and Stacks: 8
+Client Local Prepr (s) : 89.1094
+Client Prepa Post Req (s) : 0.0138188
+Client Prepa Pre Req (s) : 1.90838
+Global Prepr (s) : 642.574
+Hints (MiB) : 528
+Long Term State (KiB) : 128
+Offline Down (KiB) : 5120
+Offline Up (KiB) : 10240
+Online State (KiB) : 3526
+Prep Down (KiB) : 1792
+Prep Up (Kib) : 952
+Query Down (KiB) : 158
+Query Up (KiB) : 43
+Query: Client Decryption (ms) : 0.043427
+Query: Client Req Gen (ms) : 1.22683
+Query: Client Verification (ms) : 1.40098
+Query: Server Comp (s) : 0.0962145
+Server Per-Client Prepr (s) : 6.89472
+Server Prepa Comp (s) : 0.320232
+[       OK ] HintlessSimplePir.EndToEndPIRTest (728760 ms)
+[----------] 1 test from HintlessSimplePir (728760 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (728760 ms total)
+[  PASSED  ] 1 test.

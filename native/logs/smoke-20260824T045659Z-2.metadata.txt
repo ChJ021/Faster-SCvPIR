@@ -1,0 +1,9 @@
+run_id=20260824T045659Z-2
+finished_at=2026-08-24T12:57:29+08:00
+profile=honest-h-smoke-2mib
+target=//hintless_simplepir:new_pir_test
+upstream_commit=56b8b744276aa3f3c078509501200967d28cfc7b
+run_exit_code=139
+tee_exit_code=0
+run_log=/home/cj/PIR/native/logs/smoke-20260824T045659Z-2.log
+time_log=/home/cj/PIR/native/logs/smoke-20260824T045659Z-2.time.txt

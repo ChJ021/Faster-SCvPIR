@@ -1,0 +1,37 @@
+schema=small-client-vpir-native-environment-v1
+captured_at_utc=2026-08-24T12:04:22+00:00
+project_root=/home/user/small-client-pir
+upstream=https://github.com/mayank0403/Verifiable-Hintless-PIR.git
+commit=56b8b744276aa3f3c078509501200967d28cfc7b
+target=//hintless_simplepir:new_pir_test
+profile=honest-h-smoke-2mib
+bazel_version=6.5.0
+bazel_jobs=2
+bzlmod=false
+eigen_override=/home/user/small-client-pir/native/vendor/eigen-3.4.0
+eigen_archive_sha256=eba3f3d414d2f8cba2919c78ec6daab08fc71ba2ba4ae502b7e5d4d99fc02cda
+patched_client_sha256=2b24433a067a4747d3bcf210d16907a3c18eead802a05c0d8a59c69eb5b16b76
+patched_mat_sha256=2de69ab966fa322ade2bf92f405b21214ffa6e2def6d0728afdea61e453e946e
+highway_mode=native-dispatch
+clear_inherited_proxy=true
+CC=clang
+CXX=clang++
+uname=Linux csrg2081 6.8.0-111-generic #111~22.04.1-Ubuntu SMP PREEMPT_DYNAMIC Tue Apr 14 17:13:45 UTC  x86_64 x86_64 x86_64 GNU/Linux
+os_release=Ubuntu 22.04
+cpu_architecture=x86_64
+cpu_model=Intel(R) Core(TM) i7-10700 CPU @ 2.90GHz
+logical_cpus=16
+memory_bytes=67123113984
+clang=Ubuntu clang version 14.0.0-1ubuntu1.1
+bazel=6.5.0
+openssl=OpenSSL 3.0.2 15 Mar 2022 (Library: OpenSSL 3.0.2 15 Mar 2022)
+upstream_status= M hintless_simplepir/client.cc; M verisimplepir/src/lib/pir/mat.cpp;
+bazel_sha256=a40ac69263440761199fcb8da47ad4e3f328cbe79ffbf4ecc14e5ba252857307
+binary_sha256=58621f54cb526be683bcffd76d6dd7fd5c4f215006431ec5aefb630941db5a08
+package=clang	version=1:14.0-55~exp2
+package=gdb	version=12.1-0ubuntu1~22.04.2
+package=libgsl-dev	version=2.7.1+dfsg-3
+package=libgslcblas0	version=2.7.1+dfsg-3
+package=libmsgsl-dev	version=4.0.0-2
+package=libssl-dev	version=3.0.2-0ubuntu1.26
+package=pkg-config	version=0.29.2-1ubuntu3
