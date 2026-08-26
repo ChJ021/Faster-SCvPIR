@@ -1,0 +1,425 @@
+--- a/hintless_simplepir/server.cc
++++ b/hintless_simplepir/server.cc
+@@ -17,6 +17,7 @@
+ 
+ #include <algorithm>
+ #include <cstddef>
++#include <iostream>
+ #include <iterator>
+ #include <memory>
+ #include <string>
+@@ -54,6 +55,12 @@
+   return absl::OkStatus();
+ }
+ 
++void PrintStage0Timing(const char* stage, double duration_ms) {
++  std::cout << "[STAGE0_TIMING] scope=server stage=" << stage
++            << " duration_ms=" << duration_ms
++            << " duration_s=" << duration_ms / 1000 << std::endl;
++}
++
+ }  // namespace
+ 
+ absl::StatusOr<std::unique_ptr<Server>> Server::Create(
+@@ -319,18 +326,29 @@
+ }
+ 
+ absl::Status Server::PreprocessBSGS() {
++  const double preprocess_start = currentDateTime();
++
+   // Refresh the PRNG seeds.
++  double stage_start = currentDateTime();
+   RLWE_RETURN_IF_ERROR(GeneratePublicParams()); // Generates gk_pad_seed for BSGS and also non-BSGS case
++  PrintStage0Timing("main_public_params_and_dense_pad",
++                    currentDateTime() - stage_start);
+   
+   //std::cout << "Generated public params" << std::endl;
+ 
+   // Make sure the hint is up to date.
++  stage_start = currentDateTime();
+   RLWE_RETURN_IF_ERROR(database_->UpdateLweQueryPad(lwe_query_pad_.get()));
++  PrintStage0Timing("main_hint_install_pad",
++                    currentDateTime() - stage_start);
++  stage_start = currentDateTime();
+ #ifdef FAKE_RUN
+   RLWE_RETURN_IF_ERROR(database_->UpdateHintsFake());
+ #else
+   RLWE_RETURN_IF_ERROR(database_->UpdateHints());
+ #endif
++  PrintStage0Timing("main_hint_matrix_product",
++                    currentDateTime() - stage_start);
+   //RLWE_RETURN_IF_ERROR(database_->UpdateHints());
+   //std::cout << "Updated hints" << std::endl;
+ 
+@@ -346,6 +364,8 @@
+   linpir_databases_.clear();
+   linpir_databases_.resize(rlwe_contexts_.size());
+   for (int k = 0; k < rlwe_contexts_.size(); ++k) {
++    double hint_encode_ms = 0;
++    double database_create_ms = 0;
+     //std::cout << "Creating LinPIR databases and servers" << std::endl;
+     RlweInteger plaintext_modulus = rlwe_contexts_[k]->PlaintextModulus();
+ 
+@@ -355,15 +375,21 @@
+ 
+ 
+     for (const Database::LweMatrix& hint : database_->Hints()) {
+-    
++      stage_start = currentDateTime();
+       std::vector<std::vector<RlweInteger>> hint_mod_tk =
+           EncodeLweMatrix(hint, lwe_modulus, plaintext_modulus);
++      hint_encode_ms += currentDateTime() - stage_start;
++
++      stage_start = currentDateTime();
+       RLWE_ASSIGN_OR_RETURN(
+           auto linpir_database,
+           LinPirDatabase::CreateBSGS(params_.linpir_params, rlwe_contexts_[k].get(),
+                                  hint_mod_tk));
++      database_create_ms += currentDateTime() - stage_start;
+       linpir_databases_mod_tk.push_back(std::move(linpir_database));
+     }
++    PrintStage0Timing("linpir_hint_modulus_encode", hint_encode_ms);
++    PrintStage0Timing("linpir_database_create_bsgs", database_create_ms);
+     //std::cout << "Created LinPIR database" << std::endl;
+     std::vector<LinPirDatabase*> linpir_databases_ptrs;
+     std::transform(linpir_databases_mod_tk.begin(),
+@@ -371,6 +397,7 @@
+                    std::back_inserter(linpir_databases_ptrs),
+                    [](auto& ptr) { return ptr.get(); });
+     //std::cout << "Transform done" << std::endl;
++    stage_start = currentDateTime();
+     RLWE_ASSIGN_OR_RETURN(
+         auto linpir_server_mod_tk,
+         LinPirServer::CreateBSGS(params_.linpir_params, rlwe_contexts_[k].get(),
+@@ -378,13 +405,21 @@
+                              prng_seed_linpir_ct_pads_[k],
+                              prng_seed_linpir_gk_pad_baby_,
+                              prng_seed_linpir_gk_pad_giant_));
+-    
++    PrintStage0Timing("linpir_server_create_bsgs",
++                      currentDateTime() - stage_start);
++
++    stage_start = currentDateTime();
+     RLWE_RETURN_IF_ERROR(linpir_server_mod_tk->PreprocessBSGS());
++    PrintStage0Timing("linpir_server_preprocess_bsgs",
++                      currentDateTime() - stage_start);
+ 
+     linpir_databases_[k] = std::move(linpir_databases_mod_tk);
+     linpir_servers_[k] = std::move(linpir_server_mod_tk);
+   }
+ 
++  PrintStage0Timing("global_main_preprocess_bsgs_total",
++                    currentDateTime() - preprocess_start);
++
+   return absl::OkStatus();
+ }
+ 
+--- a/hintless_simplepir/new_pir_test.cc
++++ b/hintless_simplepir/new_pir_test.cc
+@@ -105,6 +105,14 @@
+ #define CLIENT_Q_VER_MS "Query: Client Verification (ms)"
+ #define LONG_TERM_STATE_KB "Long Term State (KiB)"
+ 
++void PrintStage0Timing(const char* scope, const char* stage,
++                       double start_ms, double end_ms) {
++  const double duration_ms = end_ms - start_ms;
++  std::cout << "[STAGE0_TIMING] scope=" << scope << " stage=" << stage
++            << " duration_ms=" << duration_ms
++            << " duration_s=" << duration_ms / 1000 << std::endl;
++}
++
+ TEST(HintlessSimplePir, EndToEndPIRTest) {
+   // Some calculation around client's query index given how database is laid out
+   uint64_t row_idx_start = index / cols_db;
+@@ -193,7 +201,8 @@
+   }
+ #endif //FAKE_RUN
+   end = currentDateTime();
+-  //std::cout << "[==> TIMER  <==] Server database creation and transpose time: " << (end-start) << " ms | " << (end-start)/1000 << " sec" << std::endl;
++  PrintStage0Timing("global", "server_database_create_and_transpose", start,
++                    end);
+   
+   const Database* database = server->GetDatabase();
+   // Preprocess the server and get public parameters.
+@@ -205,6 +214,7 @@
+   ASSERT_OK(server->Preprocess());
+ #endif //BSGS
+   end = currentDateTime();
++  PrintStage0Timing("global", "main_preprocess_bsgs_call", start, end);
+   // Server global preprocessing #1 (only main hint, i.e. overall LWE instance, and RLWE part) time
+   dict[GLOBAL_PREPR_S] += (end-start)/1000;
+ 
+@@ -214,13 +224,14 @@
+   start = currentDateTime();
+   ASSERT_OK_AND_ASSIGN(auto client, Client::Create(kParameters, public_params));
+   end = currentDateTime();
+-  //std::cout << RED << "[==> TIMER  <==] Client creation time: " << (end-start) << " ms | " << (end-start)/1000 << " sec" << END << std::endl;
++  PrintStage0Timing("client_local", "client_create", start, end);
+ 
+   // This code moves back and forth between HintlessPIR code and VeriSimplePIR (VSPIR) code. So some type-casting is needed
+   // Get A, H for VSPIR
+ 
+-  start = currentDateTime();
++  const double bridge_main_start = currentDateTime();
+   // Get D, A, H from Hintless
++  start = currentDateTime();
+   int num_shards = database->Data().size();
+   auto D_raw_vec = database->Data();
+   std::vector<lwe::Matrix> D_vec;
+@@ -233,16 +244,19 @@
+     lwe::Matrix D = ExportRawMatrix(D_raw_vec[i], kParameters.db_rows, bits_for_db_mask);
+     D_vec.push_back(D);
+   }
++  end = currentDateTime();
++  PrintStage0Timing("global", "bridge_export_database", start, end);
++
++  start = currentDateTime();
+   const lwe::Matrix* A1_ref = database->LweQueryPad();
+   auto A1 = ImportLweMatrix(*A1_ref);
+-  auto H_vec = database->Hints();
+-
+-  // Convert D, A, H to VSPIR //
+-	// A
+ 	VMatrix A_vsp(col_in, kParameters.lwe_secret_dim);
+   convertToVeriSimplePIRMatrix(A_vsp, A1);
++  end = currentDateTime();
++  PrintStage0Timing("global", "bridge_convert_main_pad", start, end);
+ 
+-	// H (directly rather than recomputing the hint)
++  start = currentDateTime();
++  auto H_vec = database->Hints();
+   std::vector<VMatrix> H_vsp_vec;
+   H_vsp_vec.reserve(num_shards);
+   for (int i = 0; i < num_shards; i++) {
+@@ -253,8 +267,9 @@
+   // Main (overall LWE instance) hint size (MB)
+   dict[HINT_MB] += (H_vsp_vec.size() * H_vsp_vec[0].rows * H_vsp_vec[0].cols * sizeof(Elem))/(1ULL << 20);
+   end = currentDateTime();
++  PrintStage0Timing("global", "bridge_convert_main_hint", start, end);
+   // Server converting Hintless -> VeriSimplePIR time
+-  dict[GLOBAL_PREPR_S] += (end-start)/1000;
++  dict[GLOBAL_PREPR_S] += (end - bridge_main_start) / 1000;
+   
+ 	// Conversions done
+ 
+@@ -262,30 +277,42 @@
+ 
+   const BinaryMatrix C = pir.PreprocSampleC();
+ 
+-  start = currentDateTime();
++  const double offline_A2_start = currentDateTime();
++  start = offline_A2_start;
+   const Matrix64 A_2 = pir.PreprocInitNew64();
++  end = currentDateTime();
++  PrintStage0Timing("global", "offline_A2_generate", start, end);
++
++  start = currentDateTime();
+ 	auto A_2_hintless = convertToHintlessPIRMatrixColumnForm64(A_2, row_in, offline_lattice_n_in);
+   end = currentDateTime();
++  PrintStage0Timing("global", "bridge_convert_offline_A2", start, end);
+   // Expanding A_2 (A for offline-only LWE instance) time
+-  dict[GLOBAL_PREPR_S] += (end-start)/1000;
+-  dict[CLIENT_PREPR_S] += (end-start)/1000;
++  dict[GLOBAL_PREPR_S] += (end - offline_A2_start) / 1000;
++  dict[CLIENT_PREPR_S] += (end - offline_A2_start) / 1000;
+   
+   // To get time to expand main A for client's preprocessing time. Note that A_2 is for offline LWE instance which is used to compute Z = C*D only.
+   start = currentDateTime();
+   const VMatrix A_temp = pir.PreprocInitNew(lattice_n_in);
+   auto A_temp_hintless = convertToHintlessPIRMatrixColumnForm(A_temp, col_in, lattice_n_in);
+   end = currentDateTime();
++  PrintStage0Timing("client_local", "main_A_expand_for_preprocessing", start,
++                    end);
+   // Expanding main A time
+   dict[CLIENT_PREPR_S] += (end-start)/1000; // Already included in server time from above
+ 
+   //std::cout << "Computing H_2 = D^T * A_2" << std::endl;
+-  start = currentDateTime();
++  const double offline_H2_start = currentDateTime();
++  start = offline_H2_start;
+ #ifdef FAKE_RUN
+   auto H_2_hintless_vec = server->TransposeProductFake64();
+ #else //FAKE_RUN
+-	ASSERT_OK_AND_ASSIGN(auto H_2_hintless_vec, server->TransposeProduct64(A_2_hintless));
++		ASSERT_OK_AND_ASSIGN(auto H_2_hintless_vec, server->TransposeProduct64(A_2_hintless));
+ #endif //FAKE_RUN
++  end = currentDateTime();
++  PrintStage0Timing("global", "offline_H2_matrix_product", start, end);
+ 
++  start = currentDateTime();
+   std::vector<Matrix64> H_2_vec;
+   H_2_vec.reserve(num_shards);
+   for (int i = 0; i < num_shards; i++) {
+@@ -294,8 +321,9 @@
+     H_2_vec.push_back(H_2);
+   }
+   end = currentDateTime();
++  PrintStage0Timing("global", "bridge_convert_offline_H2", start, end);
+   // Server global H_2 (hint for offline-only LWE instance) compute time
+-  dict[GLOBAL_PREPR_S] += (end-start)/1000;
++  dict[GLOBAL_PREPR_S] += (end - offline_H2_start) / 1000;
+   // Large offline-only LWE's hint H_2 size (MB)
+   dict[HINT_MB] += (H_2_vec.size() * H_2_vec[0].rows * H_2_vec[0].cols * sizeof(Elem64))/(1ULL << 20);
+ 
+@@ -306,16 +334,27 @@
+   const auto preproc_cts = std::get<0>(preproc_ct_sk_pair);
+   const auto preproc_sks = std::get<1>(preproc_ct_sk_pair);
+   end = currentDateTime();
++  PrintStage0Timing("client_local", "offline_challenge_encrypt", start, end);
+   // Client encrypting C time
+   dict[CLIENT_PREPR_S] += (end-start)/1000;
+   // Client offline upload size (KB)
+   dict[OFFLINE_UP_KB] += (preproc_cts.size() * preproc_cts[0].rows * preproc_cts[0].cols * sizeof(Elem64))/(1ULL << 10);
+ 
+   //std::cout << "Computing v_i = D^T * u_i, for all i, in preprocessing" << std::endl;
++  const double server_per_client_start = currentDateTime();
++  start = currentDateTime();
++		auto preproc_cts_hintless = convertToHintlessPIRMatricesFromVectors64(preproc_cts, row_in);
++  end = currentDateTime();
++  PrintStage0Timing("server_per_client", "bridge_convert_challenge_ciphertexts",
++                    start, end);
++
++  start = currentDateTime();
++		ASSERT_OK_AND_ASSIGN(auto D_T_ct, server->TransposeProductCiphertexts64(preproc_cts_hintless));
++  end = currentDateTime();
++  PrintStage0Timing("server_per_client", "offline_DT_ciphertexts_product",
++                    start, end);
++
+   start = currentDateTime();
+-	auto preproc_cts_hintless = convertToHintlessPIRMatricesFromVectors64(preproc_cts, row_in);
+-	ASSERT_OK_AND_ASSIGN(auto D_T_ct, server->TransposeProductCiphertexts64(preproc_cts_hintless));
+-	
+   std::vector<std::vector<Matrix64>> preproc_res_cts_vec;
+   preproc_res_cts_vec.reserve(num_shards);
+   for (int i = 0; i < num_shards; i++) {
+@@ -323,8 +362,11 @@
+     preproc_res_cts_vec.push_back(preproc_res_cts);
+   }
+   end = currentDateTime();
++  PrintStage0Timing("server_per_client", "bridge_convert_offline_response",
++                    start, end);
+   // Server (client-specific) D^T*C^T time
+-  dict[SV_CLIENT_SPEC_PREPR_S] += (end-start)/1000;
++  dict[SV_CLIENT_SPEC_PREPR_S] +=
++      (end - server_per_client_start) / 1000;
+   // Server offline response size (KB)
+   dict[OFFLINE_DOWN_KB] += (preproc_res_cts_vec.size() * preproc_res_cts_vec[0].size() * preproc_res_cts_vec[0][0].rows * preproc_res_cts_vec[0][0].cols * sizeof(Elem64))/(1ULL << 10);
+ 
+@@ -337,6 +379,7 @@
+     Z_vec.push_back(Z);
+   }
+   end = currentDateTime();
++  PrintStage0Timing("client_local", "offline_recover_Z", start, end);
+   // Client decrypting Z time
+   dict[CLIENT_PREPR_S] += (end-start)/1000;
+ 
+@@ -358,6 +401,7 @@
+     RZ_vec.push_back(RZ);
+   }
+   end = currentDateTime();
++  PrintStage0Timing("client_local", "offline_compress_RC_RZ", start, end);
+   // Client compression of Z time
+   dict[CLIENT_PREPR_S] += (end-start)/1000;
+ 
+@@ -368,11 +412,14 @@
+     pir.VerifyPreprocZCompressed(RZ_vec[i], A_vsp, RC, H_vsp_vec[i]);
+   }
+   end = currentDateTime();
++  PrintStage0Timing("client_local", "offline_verify_ZA_equals_CH", start,
++                    end);
+   // Client offline verification time
+   dict[CLIENT_PREPR_S] += (end-start)/1000;
+   std::cout << "Success: (Compressed) Z in preprocessing verified and preprocessing phase done.\n";
+   
+   end_prep = currentDateTime();
++  PrintStage0Timing("preprocessing", "total", start_prep, end_prep);
+   std::cout << "[==> TIMER  <==] Total preprocessing (server + client compute) time: " << (end_prep-start_prep) << " ms | " << (end_prep-start_prep)/1000 << " sec" << std::endl;
+ 
+ #endif //SH_RUN
+@@ -392,6 +439,7 @@
+   start = currentDateTime();
+   ASSERT_OK_AND_ASSIGN(auto As_s_tuple, client->Compute_A_times_s());
+   end = currentDateTime();
++  PrintStage0Timing("prepare_client", "main_A_expand_and_As", start, end);
+   // Client expansion of A and A*s computation time
+   dict[CLIENT_PREP_PRE_S] += (end-start)/1000;
+ 
+@@ -413,6 +461,7 @@
+   ASSERT_OK_AND_ASSIGN(auto prepare_req, client->PrepareLinPirGivenS(s_lwe));
+ #endif //BSGS
+   end = currentDateTime();
++  PrintStage0Timing("prepare_client", "linpir_prepare_request", start, end);
+   // Client prepare req gen time
+   dict[CLIENT_PREP_PRE_S] += (end-start)/1000;
+   // Client prepare request KB
+@@ -428,6 +477,7 @@
+   ASSERT_OK_AND_ASSIGN(auto prepare_response, server->HandlePrepareRequest(prepare_req));
+ #endif //BSGS
+   end = currentDateTime();
++  PrintStage0Timing("prepare_server", "linpir_Hs_response", start, end);
+   // Server prepare response time (LinPir H*s compute time)
+   dict[SERVER_PREP_S] += (end-start)/1000;
+   // Server prepare response KB
+@@ -439,6 +489,7 @@
+   start = currentDateTime();
+   ASSERT_OK_AND_ASSIGN(auto hs_vec, client->RecoverHsPreparePhase(prepare_response));
+   end = currentDateTime();
++  PrintStage0Timing("prepare_client", "linpir_Hs_recover", start, end);
+   // Client prepare recover time (LinPir response decryption)
+   dict[CLIENT_PREP_POST_S] += (end-start)/1000;
+ 
+@@ -458,11 +509,13 @@
+     pir.HsVerifyCompressed(As_vsp, h_times_s, RZ_vec[i], RC);
+   }
+   end2 = currentDateTime();
++  PrintStage0Timing("prepare_client", "verify_Hs", start2, end2);
+   // Client prepare verification of H*s time
+   dict[CLIENT_PREP_POST_S] += (end2-start2)/1000;
+ #endif //SH_RUN
+ 
+   end_prepare = currentDateTime();
++  PrintStage0Timing("prepare", "total", start_prepare, end_prepare);
+   std::cout << BLUE << "[==> TIMER  <==] Prepare phase (query-level preprocessing) total (client + server) time: " << (end_prepare-start_prepare) << " ms | " << (end_prepare-start_prepare)/1000 << " sec" << END << std::endl;
+ 
+   double start_online, end_online;
+@@ -473,6 +526,7 @@
+   start = currentDateTime();
+   ASSERT_OK_AND_ASSIGN(auto request_and_query, client->GenerateRequestGivenAsSkipLinPir(index, As, s_lwe));
+   end = currentDateTime();
++  PrintStage0Timing("online_client", "query_generate", start, end);
+   // Client online request generation time
+   dict[CLIENT_Q_REQ_GEN_MS] += (end-start);
+ 	
+@@ -489,6 +543,7 @@
+   start2 = currentDateTime();
+   ASSERT_OK_AND_ASSIGN(auto response, server->HandleRequestSkipLinPir(request));
+   end2 = currentDateTime();
++  PrintStage0Timing("online_server", "database_Du", start2, end2);
+   // Server-only online time (only D*u)
+   dict[SERVER_Q_RESP_S] += (end2-start2)/1000;
+   // Server online response KB 
+@@ -500,6 +555,7 @@
+   start = currentDateTime();
+   ASSERT_OK_AND_ASSIGN(auto rec_v, client->RecoverRecordAndGiveV(response, hs_vec));
+   end = currentDateTime();
++  PrintStage0Timing("online_client", "record_recover", start, end);
+   // Client record recovery time (given precomputed Hs)
+   dict[CLIENT_Q_DEC_MS] += (end-start);
+ 
+@@ -515,6 +571,7 @@
+   }
+   //std::cout << "Online verification done for all shards" << std::endl;
+   end = currentDateTime();
++  PrintStage0Timing("online_client", "verify_Du", start, end);
+   // Client online verification time (only D*u)
+   dict[CLIENT_Q_VER_MS] += (end-start);
+ #endif //SH_RUN
+@@ -523,6 +580,8 @@
+   std::cout << BLUE << "[==> TIMER  <==] Query-level preprocessing + online time: " << (end_on-start_on) << " ms | " << (end_on-start_on)/1000 << " sec" << END << std::endl;
+ 
+   end_online = currentDateTime();
++  PrintStage0Timing("online", "total_without_prepare", start_online,
++                    end_online);
+   std::cout << BLUE << "[==> TIMER  <==] Online-only (w/o prepare) phase total (client + server) time: " << (end_online-start_online) << " ms | " << (end_online-start_online)/1000 << " sec" << END << std::endl;
+   
+   if (kParameters.db_stack_cells > 1) { // Stacking

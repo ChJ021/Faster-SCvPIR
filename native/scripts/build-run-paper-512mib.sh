@@ -15,8 +15,14 @@ source "$SCRIPT_DIR/lib/common.sh"
 
 readonly PAPER_PROFILE="honest-h-paper-512mib"
 readonly TEST_SOURCE="$PIR_UPSTREAM_DIR/hintless_simplepir/new_pir_test.cc"
+readonly SERVER_SOURCE="$PIR_UPSTREAM_DIR/hintless_simplepir/server.cc"
+readonly STAGE0_PATCH="$PIR_NATIVE_ROOT/patches/stage0-preprocessing-timers.patch"
 readonly TEST_SOURCE_2MIB_SHA256="afa4a941c3fa63f8c754e383fce07eb205ba26aed68e9a34c8a3cea043e67e01"
-readonly TEST_SOURCE_512MIB_SHA256="bf9f159dd8887df58984cb21ee38dfeed8a52221800a9204e6feb5648ba87a91"
+readonly TEST_SOURCE_512MIB_BASE_SHA256="bf9f159dd8887df58984cb21ee38dfeed8a52221800a9204e6feb5648ba87a91"
+readonly TEST_SOURCE_512MIB_STAGE0_SHA256="928389846c02d37d6db3e8e664564d72f9a6a5d787e8254aabd9db4aaf96dbd7"
+readonly SERVER_SOURCE_BASE_SHA256="950b084d25faf9b6cb2bc70328cdc6ef66aa0b780224fc60f42c083bf78ad388"
+readonly SERVER_SOURCE_STAGE0_SHA256="4cbb8c7b4991b50cf6f047b775a7079fb315199634c8b580ca410f108b7113b9"
+readonly STAGE0_PATCH_SHA256="07f574f93884e039cbfa2b962fe7319e8f058208b68c87b38d8847c1fcab3b81"
 readonly MINIMUM_MEMORY_KIB=$((12 * 1024 * 1024))
 readonly RECOMMENDED_MEMORY_KIB=$((16 * 1024 * 1024))
 
@@ -26,7 +32,9 @@ Usage: native/scripts/build-run-paper-512mib.sh [OPTION]
 
 Prepare the current upstream checkout in place for the author's 512 MiB
 honest-H profile, build it with the pinned project-local Bazel toolchain, and
-run HintlessSimplePir.EndToEndPIRTest while recording resource usage.
+run HintlessSimplePir.EndToEndPIRTest while recording resource usage. Build
+and test output is displayed live and mirrored to the run-specific log files.
+Stage-0 timing records are also extracted to stage0-timings.tsv.
 
 Options:
   --prepare-only  Validate and change the three profile constants, then stop.
@@ -67,6 +75,10 @@ pir_require_command sha256sum
 pir_require_command sed
 pir_require_command grep
 pir_require_command tee
+pir_require_command stdbuf
+pir_require_command awk
+pir_require_command cat
+pir_require_command wc
 pir_require_command flock
 pir_require_command readlink
 pir_require_command /usr/bin/time
@@ -110,6 +122,7 @@ verify_common_checkout() {
     || pir_die "upstream Git metadata is missing: $PIR_UPSTREAM_DIR/.git"
 
   local actual_url actual_commit client_digest mat_digest eigen_digest
+  local stage0_patch_digest
   actual_url="$(git -C "$PIR_UPSTREAM_DIR" remote get-url origin)"
   actual_commit="$(git -C "$PIR_UPSTREAM_DIR" rev-parse HEAD)"
   [[ "$actual_url" == "$PIR_UPSTREAM_URL" ]] \
@@ -132,6 +145,12 @@ verify_common_checkout() {
   [[ "$eigen_digest" == "$PIR_EIGEN_SHA256" ]] \
     || pir_die "pinned Eigen archive checksum mismatch"
 
+  [[ -f "$STAGE0_PATCH" ]] \
+    || pir_die "stage-0 instrumentation patch is missing: $STAGE0_PATCH"
+  stage0_patch_digest="$(file_sha256 "$STAGE0_PATCH")"
+  [[ "$stage0_patch_digest" == "$STAGE0_PATCH_SHA256" ]] \
+    || pir_die "stage-0 instrumentation patch checksum mismatch"
+
   local mode_header
   mode_header="$PIR_UPSTREAM_DIR/verisimplepir/src/lib/pir/utils.h"
   grep -Eq '^#define[[:space:]]+BSGS([[:space:]]|$)' "$mode_header" \
@@ -142,10 +161,13 @@ verify_common_checkout() {
 }
 
 verify_512_source_and_status() {
-  local source_digest tracked_changes expected_changes
+  local source_digest server_digest tracked_changes expected_changes
   source_digest="$(file_sha256 "$TEST_SOURCE")"
-  [[ "$source_digest" == "$TEST_SOURCE_512MIB_SHA256" ]] \
-    || pir_die "512 MiB test source checksum mismatch: got $source_digest"
+  server_digest="$(file_sha256 "$SERVER_SOURCE")"
+  [[ "$source_digest" == "$TEST_SOURCE_512MIB_STAGE0_SHA256" ]] \
+    || pir_die "stage-0 512 MiB test source checksum mismatch: got $source_digest"
+  [[ "$server_digest" == "$SERVER_SOURCE_STAGE0_SHA256" ]] \
+    || pir_die "stage-0 server source checksum mismatch: got $server_digest"
 
   grep -Eq 'const int rows_db[[:space:]]*=[[:space:]]*32768;' "$TEST_SOURCE" \
     || pir_die "paper profile rows_db=32768 is missing"
@@ -157,17 +179,21 @@ verify_512_source_and_status() {
     || pir_die "paper profile db_record_bit_size=8 is missing"
   grep -Eq '^bool use_static_db[[:space:]]*=[[:space:]]*true;' "$TEST_SOURCE" \
     || pir_die "paper profile requires the static database path"
+  grep -Fq '[STAGE0_TIMING] scope=' "$TEST_SOURCE" \
+    || pir_die "stage-0 test timing marker is missing"
+  grep -Fq '[STAGE0_TIMING] scope=server stage=' "$SERVER_SOURCE" \
+    || pir_die "stage-0 server timing marker is missing"
 
   tracked_changes="$(git -C "$PIR_UPSTREAM_DIR" status --porcelain=v1 --untracked-files=all)"
-  expected_changes=$' M hintless_simplepir/client.cc\n M hintless_simplepir/new_pir_test.cc\n M verisimplepir/src/lib/pir/mat.cpp'
+  expected_changes=$' M hintless_simplepir/client.cc\n M hintless_simplepir/new_pir_test.cc\n M hintless_simplepir/server.cc\n M verisimplepir/src/lib/pir/mat.cpp'
   [[ "$tracked_changes" == "$expected_changes" ]] \
-    || pir_die "upstream changes are not exactly the two compatibility patches plus the 512 MiB profile"
+    || pir_die "upstream changes are not exactly the compatibility patches, 512 MiB profile, and stage-0 instrumentation"
 }
 
 prepare_512_source() {
   verify_common_checkout
 
-  local source_digest
+  local source_digest server_digest
   source_digest="$(file_sha256 "$TEST_SOURCE")"
   if [[ "$source_digest" == "$TEST_SOURCE_2MIB_SHA256" ]]; then
     # The immutable baseline verifier gives stronger assurance before the
@@ -178,10 +204,26 @@ prepare_512_source() {
       -e 's/^const int cols_db[[:space:]]*=[[:space:]]*1024;$/const int cols_db = 16384;/' \
       -e 's/^[[:space:]]*\.db_stack_cells[[:space:]]*=[[:space:]]*1,$/    .db_stack_cells = 8,/' \
       "$TEST_SOURCE"
-  elif [[ "$source_digest" == "$TEST_SOURCE_512MIB_SHA256" ]]; then
+  elif [[ "$source_digest" == "$TEST_SOURCE_512MIB_BASE_SHA256" ]]; then
     printf 'profile_source=already-prepared\n'
+  elif [[ "$source_digest" == "$TEST_SOURCE_512MIB_STAGE0_SHA256" ]]; then
+    printf 'profile_source=already-prepared-and-instrumented\n'
   else
     pir_die "new_pir_test.cc is neither the pinned 2 MiB source nor the exact 512 MiB profile (sha256=$source_digest)"
+  fi
+
+  source_digest="$(file_sha256 "$TEST_SOURCE")"
+  server_digest="$(file_sha256 "$SERVER_SOURCE")"
+  if [[ "$source_digest" == "$TEST_SOURCE_512MIB_BASE_SHA256" \
+     && "$server_digest" == "$SERVER_SOURCE_BASE_SHA256" ]]; then
+    git -C "$PIR_UPSTREAM_DIR" apply --check "$STAGE0_PATCH"
+    git -C "$PIR_UPSTREAM_DIR" apply "$STAGE0_PATCH"
+    printf 'stage0_instrumentation=applied\n'
+  elif [[ "$source_digest" == "$TEST_SOURCE_512MIB_STAGE0_SHA256" \
+       && "$server_digest" == "$SERVER_SOURCE_STAGE0_SHA256" ]]; then
+    printf 'stage0_instrumentation=already-applied\n'
+  else
+    pir_die "stage-0 instrumentation source state is inconsistent"
   fi
 
   verify_512_source_and_status
@@ -281,7 +323,12 @@ mkdir "$RESULT_DIR" || pir_die "result directory already exists: $RESULT_DIR"
 git -C "$PIR_UPSTREAM_DIR" diff --check
 git -C "$PIR_UPSTREAM_DIR" diff -- hintless_simplepir/new_pir_test.cc \
   >"$RESULT_DIR/512mib-parameters.patch"
+git -C "$PIR_UPSTREAM_DIR" diff -- \
+  hintless_simplepir/new_pir_test.cc hintless_simplepir/server.cc \
+  >"$RESULT_DIR/effective-stage0-source.patch"
 sha256sum "$TEST_SOURCE" >"$RESULT_DIR/new_pir_test.cc.sha256"
+sha256sum "$SERVER_SOURCE" >"$RESULT_DIR/server.cc.sha256"
+sha256sum "$STAGE0_PATCH" >"$RESULT_DIR/stage0-preprocessing-timers.patch.sha256"
 write_context "$RESULT_DIR/context-before.txt"
 
 printf 'profile=%s\n' "$PAPER_PROFILE"
@@ -344,6 +391,7 @@ readonly RUN_LOG="$RESULT_DIR/run.log"
 readonly TIME_LOG="$RESULT_DIR/run.time.txt"
 readonly VMSTAT_LOG="$RESULT_DIR/vmstat.log"
 readonly META_LOG="$RESULT_DIR/metadata.txt"
+readonly STAGE0_TIMINGS_LOG="$RESULT_DIR/stage0-timings.tsv"
 readonly -a RUN_COMMAND=(
   env
   -u GTEST_FILTER
@@ -352,6 +400,9 @@ readonly -a RUN_COMMAND=(
   -u GTEST_TOTAL_SHARDS
   -u GTEST_SHARD_INDEX
   -u GTEST_SHARD_STATUS_FILE
+  stdbuf
+  -oL
+  -eL
   "$TEST_BINARY"
   --gtest_filter=HintlessSimplePir.EndToEndPIRTest
   --gtest_repeat=1
@@ -393,6 +444,26 @@ cleanup_monitor
 
 readonly RUN_STATUS="${RUN_PIPE_RESULTS[0]}"
 readonly RUN_TEE_STATUS="${RUN_PIPE_RESULTS[1]}"
+awk '
+  BEGIN { print "scope\tstage\tduration_ms\tduration_s" }
+  /^\[STAGE0_TIMING\]/ {
+    scope = stage = duration_ms = duration_s = ""
+    for (i = 2; i <= NF; ++i) {
+      split($i, pair, "=")
+      if (pair[1] == "scope") scope = pair[2]
+      if (pair[1] == "stage") stage = pair[2]
+      if (pair[1] == "duration_ms") duration_ms = pair[2]
+      if (pair[1] == "duration_s") duration_s = pair[2]
+    }
+    if (scope != "" && stage != "" && duration_ms != "" && duration_s != "") {
+      print scope "\t" stage "\t" duration_ms "\t" duration_s
+    }
+  }
+' "$RUN_LOG" >"$STAGE0_TIMINGS_LOG"
+printf '%s\n' 'Stage-0 timing summary:'
+cat "$STAGE0_TIMINGS_LOG"
+
+readonly STAGE0_TIMING_COUNT="$(( $(wc -l <"$STAGE0_TIMINGS_LOG") - 1 ))"
 {
   printf 'run_id=%s\n' "$RUN_ID"
   printf 'finished_at=%s\n' "$(date --iso-8601=seconds)"
@@ -407,12 +478,15 @@ readonly RUN_TEE_STATUS="${RUN_PIPE_RESULTS[1]}"
   printf 'run_log=%s\n' "$RUN_LOG"
   printf 'time_log=%s\n' "$TIME_LOG"
   printf 'vmstat_log=%s\n' "$VMSTAT_LOG"
+  printf 'stage0_timings_log=%s\n' "$STAGE0_TIMINGS_LOG"
+  printf 'stage0_timing_count=%s\n' "$STAGE0_TIMING_COUNT"
 } >"$META_LOG"
 write_context "$RESULT_DIR/context-after.txt"
 
 printf 'run_log=%s\n' "$RUN_LOG"
 printf 'time_log=%s\n' "$TIME_LOG"
 printf 'vmstat_log=%s\n' "$VMSTAT_LOG"
+printf 'stage0_timings_log=%s\n' "$STAGE0_TIMINGS_LOG"
 printf 'metadata_log=%s\n' "$META_LOG"
 
 if [[ "$RUN_TEE_STATUS" -ne 0 ]]; then
@@ -421,6 +495,15 @@ fi
 if [[ "$RUN_STATUS" -ne 0 ]]; then
   pir_die "512 MiB test failed (exit $RUN_STATUS); inspect $RUN_LOG and $TIME_LOG"
 fi
+if ((STAGE0_TIMING_COUNT < 20)); then
+  pir_die "only $STAGE0_TIMING_COUNT stage-0 timing records were captured"
+fi
+grep -Fq $'server\tmain_hint_matrix_product\t' "$STAGE0_TIMINGS_LOG" \
+  || pir_die "main hint timing is missing from stage0-timings.tsv"
+grep -Fq $'global\toffline_H2_matrix_product\t' "$STAGE0_TIMINGS_LOG" \
+  || pir_die "offline H2 timing is missing from stage0-timings.tsv"
+grep -Fq $'client_local\toffline_challenge_encrypt\t' "$STAGE0_TIMINGS_LOG" \
+  || pir_die "offline challenge encryption timing is missing from stage0-timings.tsv"
 grep -Fq 'database size: 0.5 GiB' "$RUN_LOG" \
   || pir_die "test passed without the expected 0.5 GiB profile marker"
 grep -Fq 'Shards: 1 and Stacks: 8' "$RUN_LOG" \

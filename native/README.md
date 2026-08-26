@@ -25,7 +25,7 @@
 | 状态 | 数据库参数 | 当前是否启用 | 含义 |
 | --- | --- | --- | --- |
 | honest-H smoke | `2048 × 1024 × 8 bit = 2 MiB` | 是 | 固定提交中的默认端到端 GoogleTest；用于验证构建和协议正确性路径 |
-| 论文 512 MiB profile | `32768 × 16384 × 8 bit = 512 MiB` | 否 | 论文规模参数；必须以单独、可审查的参数补丁启用并重新测量，不能把 2 MiB 结果冒充论文复现 |
+| 论文 512 MiB profile | `32768 × 16384 × 8 bit = 512 MiB` | 由专用脚本原地启用 | 论文规模参数；以单独、可审查的参数和阶段 0 计时补丁启用，不能把 2 MiB 结果冒充论文复现 |
 | general-H | 不适用 | 尚未实现 | 上游明确把“不依赖 honest hint 的 vPIR”列为范围外；本脚手架没有补上该安全能力 |
 
 固定提交的上游 README 仍写着“默认值为 512 MiB”，但实际
@@ -145,3 +145,39 @@ native/scripts/build-run-paper-512mib.sh --build-only
 拒绝运行，并在低于建议的 16 GiB 时警告；`PIR_ALLOW_LOW_MEMORY=1` 仅用于明确接受
 swap/OOM 风险的实验。该 profile 仍是作者的 honest-H 学术 PoC，并未获得 general-H
 安全性。
+
+### 阶段 0 细粒度计时
+
+512 MiB 入口会确定性应用
+`native/patches/stage0-preprocessing-timers.patch`。该补丁只增加计时输出，不改变算法、
+密码参数、数据库布局、查询内容或验证等式。脚本校验补丁和应用后源文件的 SHA-256，
+并要求上游工作树只包含两份 Clang 兼容补丁、512 MiB 参数和阶段 0 计时改动。
+
+运行时，构建与测试输出通过 `tee` 同时显示在当前终端并记录到本次 run-id 目录；测试
+进程通过 `stdbuf` 使用行缓冲，因而每条计时记录会在阶段完成后立即可见。统一格式为：
+
+```text
+[STAGE0_TIMING] scope=<scope> stage=<stage> duration_ms=<ms> duration_s=<s>
+```
+
+计时覆盖以下边界：
+
+- 主 public parameters/稠密 A 展开、主 hint 矩阵乘；
+- hint 模数编码、LinPIR database 创建和 BSGS 预处理；
+- D/A/H 在 HintlessPIR 与 VeriSimplePIR 间的转换；
+- 离线 A2 生成、H2 矩阵乘和挑战 C 加密；
+- 每客户端 `D^T * ciphertexts` 及两侧格式转换；
+- Z 恢复、压缩和 `ZA=CH` 检查；
+- query prepare 的 `As`、LinPIR 请求、`Hs` 响应、恢复和验证；
+- 在线查询生成、`D*u`、记录恢复和验证。
+
+除完整的 `run.log` 外，脚本还会生成便于后续分析的：
+
+```text
+native/logs/512mib/<run-id>/stage0-timings.tsv
+```
+
+该 TSV 包含 `scope`、`stage`、`duration_ms` 和 `duration_s` 四列，并在测试结束后同步
+打印到终端。`metadata.txt` 记录 TSV 路径和捕获到的计时条目数量；脚本会检查主 hint、
+H2 和挑战加密等关键计时是否存在。`effective-stage0-source.patch`、源文件 SHA-256 和
+计时补丁 SHA-256 也会保存在同一目录，方便复核实验使用的准确代码。
