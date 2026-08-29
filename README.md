@@ -52,17 +52,26 @@ uv --cache-dir .uv-cache --offline run --python .venv/bin/python python -m small
 等基础系统包由 apt 安装。复现入口为：
 
 ```bash
-make native-verify
-make native-build
-make native-list-tests
-make native-smoke
-make native-env
+native/scripts/prepare-upstream.sh
+native/scripts/build-run-paper-512mib.sh --preproc-profile=baseline
+native/scripts/build-run-paper-512mib.sh --preproc-profile=ypir-main
+native/scripts/build-run-paper-512mib.sh --preproc-profile=distpir-offline
+native/scripts/build-run-paper-512mib.sh --preproc-profile=hybrid
 ```
 
-成功结果及其 SHA-256 见
+`prepare-upstream.sh` 会检出固定的作者提交，并自动应用仓库中的
+`native/patches/ypir-ntt-preprocessing.patch`。该补丁包含主 Hint 与离线
+`H_2=D^T A_2` 的精确负循环 NTT 实现，因此 GitHub 仓库不需要收录完整的第三方源码树、
+Bazel 缓存或本机虚拟环境。
+
+1 GiB 实验使用 `native/scripts/build-run-paper-1gib.sh`，参数形式与 512 MiB
+入口相同。两套脚本也支持 `--prepare-only` 和 `--build-only`。
+
+历史 smoke 记录及其 SHA-256 见
 [`native/manifests/smoke-result-20260824.json`](native/manifests/smoke-result-20260824.json)，
-具体构建边界见 [`native/README.md`](native/README.md)。该结果仍是论文作者的 honest-H、
-单进程学术 PoC；不是 general-H 或网络服务。
+具体构建边界见 [`native/README.md`](native/README.md)。该记录早于 32 位满位宽采样与
+Eigen 行写入修复，只能作为旧流程的功能/来源记录，不能作为修复后的安全或性能结果。
+当前实现仍是论文作者的 honest-H、单进程学术 PoC；不是 general-H 或网络服务。
 
 ## 为什么第一版不用 VIA 或 Verifiable BALANCED-PIR
 
@@ -78,4 +87,5 @@ VIA 仍被保留为第二阶段性能对照。只有在两个原生实现使用�
 - 作者实现：[Verifiable-Hintless-PIR](https://github.com/mayank0403/Verifiable-Hintless-PIR)，本项目计划固定提交 `56b8b744276aa3f3c078509501200967d28cfc7b`。
 - VIA：[IACR ePrint 2025/2074](https://eprint.iacr.org/2025/2074)，仅作为后期对照。
 
-本地研究 PDF 和用户原始课题材料被保留为证据输入；LaTeX 主稿、旧 MVIA 原型和论文专用脚本已从工程入口移除。
+本地研究 PDF 和用户原始课题材料不随 GitHub 工程仓库发布；LaTeX 主稿、旧 MVIA
+原型和论文专用脚本已从工程入口移除。

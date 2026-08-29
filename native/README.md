@@ -17,8 +17,11 @@
 | 编译模式 | `-c opt`、C++17、Clang |
 
 锁定值见 `manifests/upstream.lock.sh`，机器可读的部署边界见
-`manifests/deployment.json`。脚本会拒绝错误的 origin、提交、Bazel 版本，以及不等于
-已记录 Clang 18 兼容补丁的任何上游跟踪文件修改。
+`manifests/deployment.json`。首次克隆本仓库后运行
+`scripts/prepare-upstream.sh`：脚本会检出固定的作者提交，应用完整的
+`patches/ypir-ntt-preprocessing.patch`，并从固定归档准备 Eigen。完整补丁同时包含两份
+Clang 兼容修正、主 Hint 精确 NTT、离线 H2 精确 NTT、运行时 profile 和测试代码；
+因此第三方源码目录本身不进入 Git 仓库。
 
 ## 三个必须区分的状态
 
@@ -26,11 +29,13 @@
 | --- | --- | --- | --- |
 | honest-H smoke | `2048 × 1024 × 8 bit = 2 MiB` | 是 | 固定提交中的默认端到端 GoogleTest；用于验证构建和协议正确性路径 |
 | 论文 512 MiB profile | `32768 × 16384 × 8 bit = 512 MiB` | 由专用脚本原地启用 | 论文规模参数；以单独、可审查的参数和阶段 0 计时补丁启用，不能把 2 MiB 结果冒充论文复现 |
+| 论文 1 GiB profile | `32768 × 32768 × 8 bit = 1 GiB` | 由专用脚本原地启用 | 与 512 MiB 入口可双向切换，并使用独立日志目录 |
 | general-H | 不适用 | 尚未实现 | 上游明确把“不依赖 honest hint 的 vPIR”列为范围外；本脚手架没有补上该安全能力 |
 
 固定提交的上游 README 仍写着“默认值为 512 MiB”，但实际
 `hintless_simplepir/new_pir_test.cc` 已把常量设为 `2048 × 1024`，即 2 MiB。
-本部署以固定提交中的可执行代码为准，并把 512 MiB 仅记录为待启用的论文 profile。
+本部署以固定提交中的可执行代码为准；512 MiB 和 1 GiB 参数只由各自的论文运行入口
+原地启用，日志与 2 MiB smoke 隔离。
 
 上游 `WORKSPACE.bazel` 为 Eigen 3.4.0 固定的是 GitLab 过去生成的 ZIP 校验和；GitLab
 现在为同一标签提交 `3147391d...` 生成了不同的 ZIP 容器，导致原始构建失败。为保持
@@ -83,20 +88,22 @@ native/logs/                           构建、测试与 /usr/bin/time 日志
 从项目根目录运行：
 
 ```bash
-native/scripts/verify-upstream.sh
-native/scripts/build.sh
-native/scripts/list-tests.sh
-native/scripts/run-smoke.sh
-native/scripts/capture-environment.sh
+native/scripts/prepare-upstream.sh
+native/scripts/build-run-paper-512mib.sh --preproc-profile=baseline
+native/scripts/build-run-paper-512mib.sh --preproc-profile=ypir-main
+native/scripts/build-run-paper-512mib.sh --preproc-profile=distpir-offline
+native/scripts/build-run-paper-512mib.sh --preproc-profile=hybrid
 ```
 
-- `verify-upstream.sh`：检查仓库 URL/提交/工作树、2 MiB 参数、模式开关、Clang 和 Bazel。
-- `build.sh`：以固定选项编译目标并写入 `native/logs/build-*.log`。
-- `list-tests.sh`：同时列出 Bazel 测试目标和 GoogleTest 测试用例。
-- `run-smoke.sh`：运行端到端测试；标准输出、详细资源统计和退出状态分别写入
-  `smoke-*.log`、`smoke-*.time.txt` 与 `smoke-*.metadata.txt`。
-- `capture-environment.sh`：记录操作系统、CPU、内存、工具版本、包版本和 artifact
-  SHA-256；不会转储环境变量或代理凭据。
+- `prepare-upstream.sh`：准备固定上游提交、应用本项目完整源码补丁并展开 Eigen；重复执行安全。
+- `build-run-paper-512mib.sh`：在同一二进制中切换四种预处理后端，构建并运行
+  512 MiB 实验。可用 `--prepare-only` 或 `--build-only` 缩小执行范围。
+- `build-run-paper-1gib.sh`：使用相同参数形式运行 1 GiB 实验。
+- `capture-environment.sh`：可选地记录操作系统、CPU、内存、工具版本、包版本和
+  artifact SHA-256；不会转储环境变量或代理凭据。
+
+旧的 2 MiB smoke 脚本仍作为上游基线部署记录保留；完整 NTT 补丁检出后的默认源码
+处于论文参数状态，当前实验请使用上述 paper profile 入口。
 
 所有 Bazel build/run 命令都显式携带 `--noenable_bzlmod` 和 `--jobs=2`。若必须在
 不支持或不能稳定运行 Highway SIMD 的机器上，可按作者 README 的回退方式执行
@@ -119,7 +126,12 @@ profile 应在 smoke 稳定后作为下一阶段单独启用，并保存独立�
 preprocessing 0.435342 s、online-only 0.00255128 s。机器可读记录与日志校验和见
 `manifests/smoke-result-20260824.json`。
 
-## 在原工作区切换到论文 512 MiB profile
+该历史运行早于 public-pad 采样修复。原实现同时存在 32 位满位宽移位和 Eigen
+行/列方向错误，在当前优化构建下会把主 public pad 退化为全零矩阵。因此上述数字只保留
+为旧流程的功能与来源记录，不能作为修复后的密码学有效结果或性能基线；四种 profile
+都需要重新测量。
+
+## 论文规模 profile 与预处理后端切换
 
 `scripts/build-run-paper-512mib.sh` 是一个有意原地修改的服务器入口。它把固定的
 `new_pir_test.cc` 从 `2048×1024, stack=1` 精确切换为
@@ -128,11 +140,30 @@ preprocessing 0.435342 s、online-only 0.00255128 s。机器可读记录与日�
 再次修改源文件。它不会调用仍被保留为不可变 2 MiB 基线门禁的
 `verify-upstream.sh`。
 
-建议在 `tmux` 中执行：
+512 MiB 与 1 GiB 脚本都支持四种运行时 profile；同一二进制可直接比较主 hint 和
+`H_2=D^T A_2` 两个优化是否单独或同时启用：
 
 ```bash
-native/scripts/build-run-paper-512mib.sh
+native/scripts/build-run-paper-512mib.sh --preproc-profile=baseline
+native/scripts/build-run-paper-512mib.sh --preproc-profile=ypir-main
+native/scripts/build-run-paper-512mib.sh --preproc-profile=distpir-offline
+native/scripts/build-run-paper-512mib.sh --preproc-profile=hybrid
+
+native/scripts/build-run-paper-1gib.sh --preproc-profile=distpir-offline
 ```
+
+`distpir-offline` 和 `hybrid` 默认使用离线环度数 4096，也可显式选择 2048：
+
+```bash
+native/scripts/build-run-paper-512mib.sh \
+  --preproc-profile=distpir-offline --offline-ring-degree=2048
+native/scripts/build-run-paper-1gib.sh \
+  --preproc-profile=hybrid --offline-ring-degree=4096
+```
+
+向 `baseline` 或 `ypir-main` 传入 `--offline-ring-degree` 会被拒绝，避免日志中出现没有
+实际生效的实验参数。512 MiB 与 1 GiB 入口能从对方当前参数双向切换，无需先恢复到
+2 MiB smoke。
 
 也可以只准备参数或只构建：
 
@@ -141,43 +172,48 @@ native/scripts/build-run-paper-512mib.sh --prepare-only
 native/scripts/build-run-paper-512mib.sh --build-only
 ```
 
-执行记录保存在 `native/logs/512mib/<run-id>/`。脚本在有效内存低于 12 GiB 时默认
+执行记录保存在 `native/logs/512mib/<preproc-profile>/<run-id>/`。脚本在有效内存低于 12 GiB 时默认
 拒绝运行，并在低于建议的 16 GiB 时警告；`PIR_ALLOW_LOW_MEMORY=1` 仅用于明确接受
 swap/OOM 风险的实验。该 profile 仍是作者的 honest-H 学术 PoC，并未获得 general-H
 安全性。
 
-### 阶段 0 细粒度计时
+实际日志路径为 `native/logs/{512mib,1gib}/<preproc-profile>/<run-id>/`。每次运行的
+context/metadata 会同时记录主/离线 backend、环度数、pad 块数、结构化 pad 版本、精确
+模数、PRG 域标签及安全审计状态。1 GiB 入口的默认最低/建议有效内存分别为 20/32 GiB。
 
-512 MiB 入口会确定性应用
-`native/patches/stage0-preprocessing-timers.patch`。该补丁只增加计时输出，不改变算法、
-密码参数、数据库布局、查询内容或验证等式。脚本校验补丁和应用后源文件的 SHA-256，
-并要求上游工作树只包含两份 Clang 兼容补丁、512 MiB 参数和阶段 0 计时改动。
+### 独立的 H2 精确 NTT 模块
 
-运行时，构建与测试输出通过 `tee` 同时显示在当前终端并记录到本次 run-id 目录；测试
-进程通过 `stdbuf` 使用行缓冲，因而每条计时记录会在阶段完成后立即可见。统一格式为：
+`hintless_simplepir/offline_preprocessor.{h,cc}` 实现离线验证实例的结构化公共 pad。
+它在 `q_v=18014398492704769` 上直接计算负循环卷积，不做 modulus switching、舍入或
+截断；生产路径不展开 `db_rows × offline_lwe_secret_dim` 的稠密 `A_2`。模块同时提供：
+
+- `ComputeHint`：计算 `H_2=D^T A_2`；
+- `ComputePadTimesSecret`：为挑战加密计算 `A_2s`；
+- `EncryptChallenges`：保持原有 LHE 编码、误差和密文布局；
+- `MaterializePadForTesting`：仅供小规模差分测试使用。
+
+公共 pad 由原 public seed 经
+`small-client-pir/offline-pad/ypir-ntt/v1` 域分离后确定性生成。当前 2048/4096 环参数
+属于未审计的实验参数，不应把性能实验解释为新的安全证明。实现和验证细节见
+`manifests/ypir-offline-ntt.md`。
+
+### 阶段 0 核心计时
+
+512 MiB 和 1 GiB 入口只输出用于 baseline/YPIR 对照和瓶颈定位的核心计时。计时仅
+增加观测，不改变算法、密码参数、数据库布局、查询内容或验证等式。统一格式为：
 
 ```text
 [STAGE0_TIMING] scope=<scope> stage=<stage> duration_ms=<ms> duration_s=<s>
 ```
 
-计时覆盖以下边界：
+保留的计时边界为：
 
-- 主 public parameters/稠密 A 展开、主 hint 矩阵乘；
-- hint 模数编码、LinPIR database 创建和 BSGS 预处理；
-- D/A/H 在 HintlessPIR 与 VeriSimplePIR 间的转换；
-- 离线 A2 生成、H2 矩阵乘和挑战 C 加密；
-- 每客户端 `D^T * ciphertexts` 及两侧格式转换；
-- Z 恢复、压缩和 `ZA=CH` 检查；
-- query prepare 的 `As`、LinPIR 请求、`Hs` 响应、恢复和验证；
-- 在线查询生成、`D*u`、记录恢复和验证。
+- 主 public parameters/pad、主 hint 矩阵乘和主分支预处理总时间；
+- 客户端主 pad 初始化、离线 A2、H2、挑战加密、`D^T * ciphertexts` 和 Z 恢复；
+- 总预处理、`As`、prepare 总时间、在线 `D*u` 和纯在线总时间。
 
-除完整的 `run.log` 外，脚本还会生成便于后续分析的：
-
-```text
-native/logs/512mib/<run-id>/stage0-timings.tsv
-```
-
-该 TSV 包含 `scope`、`stage`、`duration_ms` 和 `duration_s` 四列，并在测试结束后同步
-打印到终端。`metadata.txt` 记录 TSV 路径和捕获到的计时条目数量；脚本会检查主 hint、
-H2 和挑战加密等关键计时是否存在。`effective-stage0-source.patch`、源文件 SHA-256 和
-计时补丁 SHA-256 也会保存在同一目录，方便复核实验使用的准确代码。
+构建输出只显示在终端，构建失败通过脚本退出码报告，不再生成 `build.log`、
+`build.time.txt` 或单独的构建状态文件。测试输出仍通过 `tee` 写入 `run.log`；资源与
+复现实验所需信息保存在 `run.time.txt`、`vmstat.log`、`metadata.txt`、
+`context-before.txt` 和 `context-after.txt`。源码和二进制摘要直接记录在 metadata/context
+中，不再生成单独的 SHA-256 文件或参数 patch 文件。

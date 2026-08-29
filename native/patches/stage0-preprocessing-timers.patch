@@ -1,18 +1,28 @@
 --- a/hintless_simplepir/server.cc
 +++ b/hintless_simplepir/server.cc
-@@ -17,6 +17,7 @@
+@@ -17,6 +17,8 @@
  
  #include <algorithm>
  #include <cstddef>
++#include <cstring>
 +#include <iostream>
  #include <iterator>
  #include <memory>
  #include <string>
-@@ -54,6 +55,12 @@
+@@ -54,6 +56,21 @@
    return absl::OkStatus();
  }
  
++bool IsImportantStage0Timing(const char* stage) {
++  return std::strcmp(stage, "main_public_params_and_pad") == 0 ||
++         std::strcmp(stage, "main_public_params_and_dense_pad") == 0 ||
++         std::strcmp(stage, "main_hint_matrix_product") == 0;
++}
++
 +void PrintStage0Timing(const char* stage, double duration_ms) {
++  if (!IsImportantStage0Timing(stage)) {
++    return;
++  }
 +  std::cout << "[STAGE0_TIMING] scope=server stage=" << stage
 +            << " duration_ms=" << duration_ms
 +            << " duration_s=" << duration_ms / 1000 << std::endl;
@@ -116,12 +126,46 @@
  
 --- a/hintless_simplepir/new_pir_test.cc
 +++ b/hintless_simplepir/new_pir_test.cc
-@@ -105,6 +105,14 @@
+@@ -20,5 +20,6 @@
+ #include <memory>
++#include <cstring>
+ #include <string>
+ #include <tuple>
+ #include <utility>
+ #include <iostream>
+@@ -105,6 +106,41 @@
  #define CLIENT_Q_VER_MS "Query: Client Verification (ms)"
  #define LONG_TERM_STATE_KB "Long Term State (KiB)"
  
++bool IsImportantStage0Timing(const char* stage) {
++  static constexpr const char* kImportantStages[] = {
++      "main_preprocess_bsgs_call",
++      "client_create",
++      "client_create_main_pad_backend",
++      "offline_A2_generate",
++      "offline_H2_matrix_product",
++      "offline_challenge_encrypt",
++      "offline_DT_ciphertexts_product",
++      "offline_recover_Z",
++      "total",
++      "main_A_expand_and_As",
++      "main_pad_times_secret",
++      "database_Du",
++      "total_without_prepare",
++  };
++  for (const char* important_stage : kImportantStages) {
++    if (std::strcmp(stage, important_stage) == 0) {
++      return true;
++    }
++  }
++  return false;
++}
++
 +void PrintStage0Timing(const char* scope, const char* stage,
 +                       double start_ms, double end_ms) {
++  if (!IsImportantStage0Timing(stage)) {
++    return;
++  }
 +  const double duration_ms = end_ms - start_ms;
 +  std::cout << "[STAGE0_TIMING] scope=" << scope << " stage=" << stage
 +            << " duration_ms=" << duration_ms

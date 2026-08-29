@@ -1,0 +1,4454 @@
+diff --git a/hintless_simplepir/BUILD b/hintless_simplepir/BUILD
+index f76fda5..f944a2a 100644
+--- a/hintless_simplepir/BUILD
++++ b/hintless_simplepir/BUILD
+@@ -169,6 +169,51 @@ cc_library(
+     ],
+ )
+ 
++# Runtime-replaceable implementation of the main public preprocessing pad.
++cc_library(
++    name = "main_preprocessor",
++    srcs = ["main_preprocessor.cc"],
++    hdrs = ["main_preprocessor.h"],
++    deps = [
++        ":database_hwy",
++        ":parameters",
++        "//lwe:lwe_symmetric_encryption",
++        "//lwe:matrix_conversion",
++        "//lwe:negacyclic_ntt",
++        "//lwe:types",
++        "@com_github_google_shell-encryption//shell_encryption:statusor_fork",
++        "@com_github_google_shell-encryption//shell_encryption/prng",
++        "@com_github_google_shell-encryption//shell_encryption/prng:single_thread_chacha_prng",
++        "@com_github_google_shell-encryption//shell_encryption/prng:single_thread_hkdf_prng",
++        "@com_google_absl//absl/memory",
++        "@com_google_absl//absl/status",
++        "@com_google_absl//absl/status:statusor",
++        "@com_google_absl//absl/strings",
++        "//verisimplepir:verisimplepir_lib",
++    ],
++)
++
++# Exact structured public pad for H_2 = D^T A_2 and offline challenges.
++cc_library(
++    name = "offline_preprocessor",
++    srcs = ["offline_preprocessor.cc"],
++    hdrs = ["offline_preprocessor.h"],
++    deps = [
++        ":database_hwy",
++        ":parameters",
++        "//lwe:negacyclic_ntt",
++        "@com_github_google_shell-encryption//shell_encryption:statusor_fork",
++        "@com_github_google_shell-encryption//shell_encryption/prng",
++        "@com_github_google_shell-encryption//shell_encryption/prng:single_thread_chacha_prng",
++        "@com_github_google_shell-encryption//shell_encryption/prng:single_thread_hkdf_prng",
++        "@com_google_absl//absl/memory",
++        "@com_google_absl//absl/status",
++        "@com_google_absl//absl/status:statusor",
++        "@com_google_absl//absl/strings",
++        "//verisimplepir:verisimplepir_lib",
++    ],
++)
++
+ # Hintless SimplePIR server.
+ cc_library(
+     name = "server",
+@@ -176,6 +221,7 @@ cc_library(
+     hdrs = ["server.h"],
+     deps = [
+         ":database_hwy",
++        ":main_preprocessor",
+         ":parameters",
+         ":serialization_cc_proto",
+         ":utils",
+@@ -203,6 +249,7 @@ cc_library(
+     srcs = ["client.cc"],
+     hdrs = ["client.h"],
+     deps = [
++        ":main_preprocessor",
+         ":parameters",
+         ":serialization_cc_proto",
+         ":utils",
+@@ -237,13 +284,14 @@ cc_test(
+     deps = [
+         ":client",
+         ":database_hwy",
++        ":offline_preprocessor",
+         ":parameters",
+         ":server",
+         "//linpir:parameters",
+         ":simplepir",
+         "//lwe:types",
+         "//lwe:matrix_conversion",
+-        "@com_github_google_googletest//:gtest_main",
++        "@com_github_google_googletest//:gtest",
+         "@com_github_google_shell-encryption//shell_encryption/prng:single_thread_hkdf_prng",
+         "@com_github_google_shell-encryption//shell_encryption/testing:matchers",
+         "@com_github_google_shell-encryption//shell_encryption/testing:status_testing",
+@@ -251,4 +299,41 @@ cc_test(
+         "@com_google_absl//absl/status:statusor",
+         "//verisimplepir:verisimplepir_lib",
+     ],
+-)
+\ No newline at end of file
++)
++
++cc_test(
++    name = "main_preprocessor_test",
++    srcs = ["main_preprocessor_test.cc"],
++    deps = [
++        ":database_hwy",
++        ":main_preprocessor",
++        ":parameters",
++        "//lwe:matrix_conversion",
++        "//lwe:negacyclic_ntt",
++        "//lwe:types",
++        "@com_github_google_googletest//:gtest_main",
++        "@com_github_google_shell-encryption//shell_encryption/prng:single_thread_hkdf_prng",
++        "@com_github_google_shell-encryption//shell_encryption/testing:matchers",
++        "@com_github_google_shell-encryption//shell_encryption/testing:status_testing",
++        "@com_google_absl//absl/status:statusor",
++    ],
++)
++
++cc_test(
++    name = "offline_preprocessor_test",
++    srcs = ["offline_preprocessor_test.cc"],
++    deps = [
++        ":database_hwy",
++        ":offline_preprocessor",
++        ":parameters",
++        "//lwe:matrix_conversion",
++        "//lwe:negacyclic_ntt",
++        "//lwe:types",
++        "@com_github_google_googletest//:gtest_main",
++        "@com_github_google_shell-encryption//shell_encryption/prng:single_thread_hkdf_prng",
++        "@com_github_google_shell-encryption//shell_encryption/testing:matchers",
++        "@com_github_google_shell-encryption//shell_encryption/testing:status_testing",
++        "@com_google_absl//absl/status:statusor",
++        "//verisimplepir:verisimplepir_lib",
++    ],
++)
+diff --git a/hintless_simplepir/client.cc b/hintless_simplepir/client.cc
+index 2a8a1bf..9f57d17 100644
+--- a/hintless_simplepir/client.cc
++++ b/hintless_simplepir/client.cc
+@@ -28,6 +28,7 @@
+ #include "absl/strings/str_cat.h"
+ #include "absl/strings/string_view.h"
+ #include "hintless_simplepir/parameters.h"
++#include "hintless_simplepir/main_preprocessor.h"
+ #include "hintless_simplepir/serialization.pb.h"
+ #include "hintless_simplepir/utils.h"
+ #include "lwe/encode.h"
+@@ -43,6 +44,39 @@
+ namespace hintless_pir {
+ namespace hintless_simplepir {
+ 
++namespace {
++
++absl::Status ValidateMainPreprocessorMetadata(
++    const MainPreprocessorMetadata& expected,
++    const HintlessPirServerPublicParams& public_params) {
++  if (!public_params.has_main_preprocessor_backend()) {
++    if (expected.backend == MainPreprocessorBackend::kDenseLwe) {
++      return absl::OkStatus();
++    }
++    return absl::InvalidArgumentError(
++        "YPIR main public parameters are missing backend metadata");
++  }
++  const SerializedMainPreprocessorBackend expected_backend =
++      expected.backend == MainPreprocessorBackend::kYpirNtt
++          ? MAIN_PREPROCESSOR_YPIR_NTT
++          : MAIN_PREPROCESSOR_DENSE_LWE;
++  if (public_params.main_preprocessor_backend() != expected_backend ||
++      public_params.main_ring_degree() != expected.ring_degree ||
++      public_params.main_pad_block_count() != expected.pad_block_count ||
++      public_params.structured_pad_version() !=
++          expected.structured_pad_version ||
++      public_params.main_modulus() != expected.modulus ||
++      public_params.main_secret_dimension() != expected.secret_dimension ||
++      public_params.main_prg_domain() != expected.prg_domain ||
++      public_params.main_security_status() != expected.security_status) {
++    return absl::InvalidArgumentError(
++        "main preprocessing metadata does not match client parameters");
++  }
++  return absl::OkStatus();
++}
++
++}  // namespace
++
+ 
+ absl::StatusOr<std::unique_ptr<Client>> Client::Create(
+     const Parameters& params,
+@@ -88,10 +122,17 @@ absl::StatusOr<std::unique_ptr<Client>> Client::Create(
+       RlweRnsContext crt_context,
+       RlweRnsContext::Create(rlwe_params.log_n, rlwe_params.ts, /*ps=*/{}, 2));
+ 
++  RLWE_ASSIGN_OR_RETURN(
++      auto main_preprocessor,
++      CreateMainPreprocessor(params, public_params.prng_seed_lwe_query_pad()));
++  RLWE_RETURN_IF_ERROR(ValidateMainPreprocessorMetadata(
++      main_preprocessor->Metadata(), public_params));
++
+   return absl::WrapUnique(
+       new Client(params, public_params.prng_seed_lwe_query_pad(),
+                  std::move(rlwe_contexts), std::move(rlwe_moduli),
+-                 std::move(linpir_clients), std::move(crt_context)));
++                 std::move(linpir_clients), std::move(crt_context),
++                 std::move(main_preprocessor)));
+ }
+ 
+ 
+@@ -101,15 +142,9 @@ absl::StatusOr<HintlessPirRequest> Client::GenerateRequest(int64_t index) {
+   }
+ 
+   // Step 1. Encrypting the selection vector under LWE.
+-  lwe::Matrix lwe_pad;
+   std::unique_ptr<rlwe::SecurePrng> lwe_enc_prng;
+   std::string prng_seed_linpir_sk;
+   if (params_.prng_type == rlwe::PRNG_TYPE_HKDF) {
+-    RLWE_ASSIGN_OR_RETURN(auto pad_prng, rlwe::SingleThreadHkdfPrng::Create(
+-                                             prng_seed_lwe_query_pad_));
+-    RLWE_ASSIGN_OR_RETURN(
+-        lwe_pad, lwe::ExpandPad(params_.db_cols, params_.lwe_secret_dim,
+-                                pad_prng.get()));
+     RLWE_ASSIGN_OR_RETURN(std::string prng_seed_enc,
+                           rlwe::SingleThreadHkdfPrng::GenerateSeed());
+     RLWE_ASSIGN_OR_RETURN(lwe_enc_prng,
+@@ -118,11 +153,6 @@ absl::StatusOr<HintlessPirRequest> Client::GenerateRequest(int64_t index) {
+                           rlwe::SingleThreadHkdfPrng::GenerateSeed());
+ 
+   } else {
+-    RLWE_ASSIGN_OR_RETURN(auto pad_prng, rlwe::SingleThreadChaChaPrng::Create(
+-                                             prng_seed_lwe_query_pad_));
+-    RLWE_ASSIGN_OR_RETURN(
+-        lwe_pad, lwe::ExpandPad(params_.db_cols, params_.lwe_secret_dim,
+-                                pad_prng.get()));
+     RLWE_ASSIGN_OR_RETURN(std::string prng_seed_enc,
+                           rlwe::SingleThreadChaChaPrng::GenerateSeed());
+     RLWE_ASSIGN_OR_RETURN(lwe_enc_prng,
+@@ -131,22 +161,21 @@ absl::StatusOr<HintlessPirRequest> Client::GenerateRequest(int64_t index) {
+                           rlwe::SingleThreadChaChaPrng::GenerateSeed());
+   }
+ 
+-  // Reduce pad modulo the prime (if prime used)
+-  uint64_t rows = lwe_pad.rows();
+-  uint64_t cols = lwe_pad.cols();
+-  for (uint64_t i = 0; i < rows; i++) {
+-    for (uint64_t j = 0; j < cols; j++) {
+-      lwe_pad(i, j) = fast_mod_max_64(lwe_pad(i, j));
+-    }
+-  }
+-
+   RLWE_ASSIGN_OR_RETURN(
+       lwe::SymmetricLweKey lwe_secret_key,
+       lwe::SymmetricLweKey::Sample(params_.lwe_secret_dim, lwe_enc_prng.get()));
++  RLWE_ASSIGN_OR_RETURN(
++      lwe::Vector main_as,
++      main_preprocessor_->ComputePadTimesSecret(lwe_secret_key.Key()));
+ 
+   // Choosing the largest scaling factor that supports our plaintext space
+   int log_scaling_factor =
+       params_.lwe_modulus_bit_size - params_.lwe_plaintext_bit_size;
++  lwe::Integer scaling_factor = static_cast<lwe::Integer>(SOL_NTT_PRIME) /
++                                (1 << params_.lwe_plaintext_bit_size);
++  if (scaling_factor == 0) {
++    scaling_factor = (1 << log_scaling_factor);
++  }
+ 
+   // Plaintext is a selection vector for col_idx
+   int64_t row_idx = index / params_.db_cols;
+@@ -154,8 +183,8 @@ absl::StatusOr<HintlessPirRequest> Client::GenerateRequest(int64_t index) {
+   lwe::Vector query_vector = lwe::Vector::Zero(params_.db_cols);
+   query_vector[col_idx] = 1;
+ 
+-  RLWE_RETURN_IF_ERROR(lwe_secret_key.EncryptFromPadInPlace(
+-      query_vector, lwe_pad, log_scaling_factor, lwe_enc_prng.get()));
++  RLWE_RETURN_IF_ERROR(lwe_secret_key.EncryptFromPadInPlaceExplicitGivenAs(
++      query_vector, main_as, scaling_factor, lwe_enc_prng.get()));
+ 
+   // Cache the per request state.
+   state_ = ClientState{.row_idx = row_idx,
+@@ -178,15 +207,9 @@ absl::StatusOr<std::pair<HintlessPirRequest, lwe::Vector>> Client::GenerateReque
+   }
+ 
+   // Step 1. Encrypting the selection vector under LWE.
+-  lwe::Matrix lwe_pad;
+   std::unique_ptr<rlwe::SecurePrng> lwe_enc_prng;
+   std::string prng_seed_linpir_sk;
+   if (params_.prng_type == rlwe::PRNG_TYPE_HKDF) {
+-    RLWE_ASSIGN_OR_RETURN(auto pad_prng, rlwe::SingleThreadHkdfPrng::Create(
+-                                             prng_seed_lwe_query_pad_));
+-    RLWE_ASSIGN_OR_RETURN(
+-        lwe_pad, lwe::ExpandPad(params_.db_cols, params_.lwe_secret_dim,
+-                                pad_prng.get()));
+     RLWE_ASSIGN_OR_RETURN(std::string prng_seed_enc,
+                           rlwe::SingleThreadHkdfPrng::GenerateSeed());
+     RLWE_ASSIGN_OR_RETURN(lwe_enc_prng,
+@@ -195,11 +218,6 @@ absl::StatusOr<std::pair<HintlessPirRequest, lwe::Vector>> Client::GenerateReque
+                           rlwe::SingleThreadHkdfPrng::GenerateSeed());
+ 
+   } else {
+-    RLWE_ASSIGN_OR_RETURN(auto pad_prng, rlwe::SingleThreadChaChaPrng::Create(
+-                                             prng_seed_lwe_query_pad_));
+-    RLWE_ASSIGN_OR_RETURN(
+-        lwe_pad, lwe::ExpandPad(params_.db_cols, params_.lwe_secret_dim,
+-                                pad_prng.get()));
+     RLWE_ASSIGN_OR_RETURN(std::string prng_seed_enc,
+                           rlwe::SingleThreadChaChaPrng::GenerateSeed());
+     RLWE_ASSIGN_OR_RETURN(lwe_enc_prng,
+@@ -208,20 +226,12 @@ absl::StatusOr<std::pair<HintlessPirRequest, lwe::Vector>> Client::GenerateReque
+                           rlwe::SingleThreadChaChaPrng::GenerateSeed());
+   }
+ 
+-  /*
+-  // Reduce pad modulo the prime (if prime used)
+-  uint64_t rows = lwe_pad.rows();
+-  uint64_t cols = lwe_pad.cols();
+-  for (uint64_t i = 0; i < rows; i++) {
+-    for (uint64_t j = 0; j < cols; j++) {
+-      lwe_pad(i, j) = fast_mod_max_64(lwe_pad(i, j));
+-    }
+-  }
+-  */
+-
+   RLWE_ASSIGN_OR_RETURN(
+       lwe::SymmetricLweKey lwe_secret_key,
+       lwe::SymmetricLweKey::Sample(params_.lwe_secret_dim, lwe_enc_prng.get()));
++  RLWE_ASSIGN_OR_RETURN(
++      lwe::Vector main_as,
++      main_preprocessor_->ComputePadTimesSecret(lwe_secret_key.Key()));
+ 
+   // Choosing the largest scaling factor that supports our plaintext space
+   int log_scaling_factor =
+@@ -233,17 +243,15 @@ absl::StatusOr<std::pair<HintlessPirRequest, lwe::Vector>> Client::GenerateReque
+ 
+   // Plaintext is a selection vector for col_idx
+   int64_t row_idx = index / params_.db_cols;
+-  uint64_t row_idx_end = row_idx + params_.db_stack_cells;
++  int64_t row_idx_end =
++      row_idx + static_cast<int64_t>(params_.db_stack_cells);
+   int64_t col_idx = index % params_.db_cols;
+   lwe::Vector query_vector = lwe::Vector::Zero(params_.db_cols);
+   query_vector[col_idx] = 1;
+ 
+-  //RLWE_RETURN_IF_ERROR(lwe_secret_key.EncryptFromPadInPlace(
+-  //    query_vector, lwe_pad, log_scaling_factor, lwe_enc_prng.get()));
+-  
+-  RLWE_RETURN_IF_ERROR(lwe_secret_key.EncryptFromPadInPlaceExplicit(
+-      query_vector, lwe_pad, scaling_factor, lwe_enc_prng.get()));
+-  
++  RLWE_RETURN_IF_ERROR(lwe_secret_key.EncryptFromPadInPlaceExplicitGivenAs(
++      query_vector, main_as, scaling_factor, lwe_enc_prng.get()));
++
+ 
+   // Cache the per request state.
+   state_ = ClientState{.row_idx = row_idx,
+@@ -309,20 +317,21 @@ absl::StatusOr<std::pair<HintlessPirRequest, lwe::Vector>> Client::GenerateReque
+ 
+   // Plaintext is a selection vector for col_idx
+   int64_t row_idx = index / params_.db_cols;
+-  uint64_t row_idx_end = row_idx + params_.db_stack_cells;
++  int64_t row_idx_end =
++      row_idx + static_cast<int64_t>(params_.db_stack_cells);
+   int64_t col_idx = index % params_.db_cols;
+   lwe::Vector query_vector = lwe::Vector::Zero(params_.db_cols);
+   query_vector[col_idx] = 1;
+ 
+   //RLWE_RETURN_IF_ERROR(lwe_secret_key.EncryptFromPadInPlace(
+   //    query_vector, lwe_pad, log_scaling_factor, lwe_enc_prng.get()));
+-  
++
+   //RLWE_RETURN_IF_ERROR(lwe_secret_key.EncryptFromPadInPlaceExplicit(
+   //    query_vector, lwe_pad, scaling_factor, lwe_enc_prng.get()));
+ 
+   RLWE_RETURN_IF_ERROR(s_lwe.EncryptFromPadInPlaceExplicitGivenAs(
+       query_vector, As, scaling_factor, lwe_enc_prng.get()));
+-  
++
+ 
+   // Cache the per request state.
+   state_ = ClientState{.row_idx = row_idx,
+@@ -353,15 +362,9 @@ absl::StatusOr<std::pair<HintlessPirRequest, lwe::Vector>> Client::GenerateReque
+   }
+ 
+   // Step 1. Encrypting the selection vector under LWE.
+-  lwe::Matrix lwe_pad;
+   std::unique_ptr<rlwe::SecurePrng> lwe_enc_prng;
+   std::string prng_seed_linpir_sk;
+   if (params_.prng_type == rlwe::PRNG_TYPE_HKDF) {
+-    RLWE_ASSIGN_OR_RETURN(auto pad_prng, rlwe::SingleThreadHkdfPrng::Create(
+-                                             prng_seed_lwe_query_pad_));
+-    RLWE_ASSIGN_OR_RETURN(
+-        lwe_pad, lwe::ExpandPad(params_.db_cols, params_.lwe_secret_dim,
+-                                pad_prng.get()));
+     RLWE_ASSIGN_OR_RETURN(std::string prng_seed_enc,
+                           rlwe::SingleThreadHkdfPrng::GenerateSeed());
+     RLWE_ASSIGN_OR_RETURN(lwe_enc_prng,
+@@ -370,11 +373,6 @@ absl::StatusOr<std::pair<HintlessPirRequest, lwe::Vector>> Client::GenerateReque
+                           rlwe::SingleThreadHkdfPrng::GenerateSeed());
+ 
+   } else {
+-    RLWE_ASSIGN_OR_RETURN(auto pad_prng, rlwe::SingleThreadChaChaPrng::Create(
+-                                             prng_seed_lwe_query_pad_));
+-    RLWE_ASSIGN_OR_RETURN(
+-        lwe_pad, lwe::ExpandPad(params_.db_cols, params_.lwe_secret_dim,
+-                                pad_prng.get()));
+     RLWE_ASSIGN_OR_RETURN(std::string prng_seed_enc,
+                           rlwe::SingleThreadChaChaPrng::GenerateSeed());
+     RLWE_ASSIGN_OR_RETURN(lwe_enc_prng,
+@@ -383,20 +381,12 @@ absl::StatusOr<std::pair<HintlessPirRequest, lwe::Vector>> Client::GenerateReque
+                           rlwe::SingleThreadChaChaPrng::GenerateSeed());
+   }
+ 
+-  /*
+-  // Reduce pad modulo the prime (if prime used)
+-  uint64_t rows = lwe_pad.rows();
+-  uint64_t cols = lwe_pad.cols();
+-  for (uint64_t i = 0; i < rows; i++) {
+-    for (uint64_t j = 0; j < cols; j++) {
+-      lwe_pad(i, j) = fast_mod_max_64(lwe_pad(i, j));
+-    }
+-  }
+-  */
+-
+   RLWE_ASSIGN_OR_RETURN(
+       lwe::SymmetricLweKey lwe_secret_key,
+       lwe::SymmetricLweKey::Sample(params_.lwe_secret_dim, lwe_enc_prng.get()));
++  RLWE_ASSIGN_OR_RETURN(
++      lwe::Vector main_as,
++      main_preprocessor_->ComputePadTimesSecret(lwe_secret_key.Key()));
+ 
+   // Choosing the largest scaling factor that supports our plaintext space
+   int log_scaling_factor =
+@@ -408,17 +398,15 @@ absl::StatusOr<std::pair<HintlessPirRequest, lwe::Vector>> Client::GenerateReque
+ 
+   // Plaintext is a selection vector for col_idx
+   int64_t row_idx = index / params_.db_cols;
+-  uint64_t row_idx_end = row_idx + params_.db_stack_cells;
++  int64_t row_idx_end =
++      row_idx + static_cast<int64_t>(params_.db_stack_cells);
+   int64_t col_idx = index % params_.db_cols;
+   lwe::Vector query_vector = lwe::Vector::Zero(params_.db_cols);
+   query_vector[col_idx] = 1;
+ 
+-  //RLWE_RETURN_IF_ERROR(lwe_secret_key.EncryptFromPadInPlace(
+-  //    query_vector, lwe_pad, log_scaling_factor, lwe_enc_prng.get()));
+-  
+-  RLWE_RETURN_IF_ERROR(lwe_secret_key.EncryptFromPadInPlaceExplicit(
+-      query_vector, lwe_pad, scaling_factor, lwe_enc_prng.get()));
+-  
++  RLWE_RETURN_IF_ERROR(lwe_secret_key.EncryptFromPadInPlaceExplicitGivenAs(
++      query_vector, main_as, scaling_factor, lwe_enc_prng.get()));
++
+ 
+   // Cache the per request state.
+   state_ = ClientState{.row_idx = row_idx,
+@@ -484,20 +472,21 @@ absl::StatusOr<std::pair<HintlessPirRequest, lwe::Vector>> Client::GenerateReque
+ 
+   // Plaintext is a selection vector for col_idx
+   int64_t row_idx = index / params_.db_cols;
+-  uint64_t row_idx_end = row_idx + params_.db_stack_cells;
++  int64_t row_idx_end =
++      row_idx + static_cast<int64_t>(params_.db_stack_cells);
+   int64_t col_idx = index % params_.db_cols;
+   lwe::Vector query_vector = lwe::Vector::Zero(params_.db_cols);
+   query_vector[col_idx] = 1;
+ 
+   //RLWE_RETURN_IF_ERROR(lwe_secret_key.EncryptFromPadInPlace(
+   //    query_vector, lwe_pad, log_scaling_factor, lwe_enc_prng.get()));
+-  
++
+   //RLWE_RETURN_IF_ERROR(s_lwe.EncryptFromPadInPlaceExplicit(
+   //    query_vector, lwe_pad, scaling_factor, lwe_enc_prng.get()));
+ 
+   RLWE_RETURN_IF_ERROR(s_lwe.EncryptFromPadInPlaceExplicitGivenAs(
+       query_vector, As, scaling_factor, lwe_enc_prng.get()));
+-  
++
+ 
+   // Cache the per request state.
+   state_ = ClientState{.row_idx = row_idx,
+@@ -533,7 +522,7 @@ absl::StatusOr<HintlessPirRequest> Client::PrepareLinPirGivenS_BSGS(lwe::Symmetr
+     RLWE_ASSIGN_OR_RETURN(prng_seed_linpir_sk,
+                           rlwe::SingleThreadChaChaPrng::GenerateSeed());
+   }
+-  
++
+ 
+   // Cache the per request state.
+   state_ = ClientState{.row_idx = 0,
+@@ -563,7 +552,7 @@ absl::StatusOr<HintlessPirRequest> Client::PrepareLinPirGivenS(lwe::SymmetricLwe
+     RLWE_ASSIGN_OR_RETURN(prng_seed_linpir_sk,
+                           rlwe::SingleThreadChaChaPrng::GenerateSeed());
+   }
+-  
++
+ 
+   // Cache the per request state.
+   state_ = ClientState{.row_idx = 0,
+@@ -612,25 +601,26 @@ absl::StatusOr<std::pair<HintlessPirRequest, lwe::Vector>> Client::GenerateReque
+ 
+   // Plaintext is a selection vector for col_idx
+   int64_t row_idx = index / params_.db_cols;
+-  uint64_t row_idx_end = row_idx + params_.db_stack_cells;
++  int64_t row_idx_end =
++      row_idx + static_cast<int64_t>(params_.db_stack_cells);
+   int64_t col_idx = index % params_.db_cols;
+   lwe::Vector query_vector = lwe::Vector::Zero(params_.db_cols);
+   query_vector[col_idx] = 1;
+ 
+   //RLWE_RETURN_IF_ERROR(lwe_secret_key.EncryptFromPadInPlace(
+   //    query_vector, lwe_pad, log_scaling_factor, lwe_enc_prng.get()));
+-  
++
+   //RLWE_RETURN_IF_ERROR(s_lwe.EncryptFromPadInPlaceExplicit(
+   //    query_vector, lwe_pad, scaling_factor, lwe_enc_prng.get()));
+ 
+   RLWE_RETURN_IF_ERROR(s_lwe.EncryptFromPadInPlaceExplicitGivenAs(
+       query_vector, As, scaling_factor, lwe_enc_prng.get()));
+-  
++
+ 
+   // Cache the per request state.
+   state_.row_idx = row_idx;
+   state_.col_idx = col_idx;
+-                       
++
+   state_new_.row_idx_begin = row_idx;
+   state_new_.row_idx_end = row_idx_end;
+   state_new_.col_idx = col_idx;
+@@ -644,26 +634,15 @@ absl::StatusOr<std::pair<HintlessPirRequest, lwe::Vector>> Client::GenerateReque
+ absl::StatusOr<std::tuple<VMatrix, lwe::Vector, lwe::SymmetricLweKey>> Client::Compute_A_times_s() {
+   double start, end;
+   start = currentDateTime();
+-  // Step 1. Encrypting the selection vector under LWE.
+-  lwe::Matrix lwe_pad;
++  // Sample the LWE secret and let the selected pad backend compute A*s.
+   std::unique_ptr<rlwe::SecurePrng> lwe_enc_prng;
+   if (params_.prng_type == rlwe::PRNG_TYPE_HKDF) {
+-    RLWE_ASSIGN_OR_RETURN(auto pad_prng, rlwe::SingleThreadHkdfPrng::Create(
+-                                             prng_seed_lwe_query_pad_));
+-    RLWE_ASSIGN_OR_RETURN(
+-        lwe_pad, lwe::ExpandPad(params_.db_cols, params_.lwe_secret_dim,
+-                                pad_prng.get()));
+     RLWE_ASSIGN_OR_RETURN(std::string prng_seed_enc,
+                           rlwe::SingleThreadHkdfPrng::GenerateSeed());
+     RLWE_ASSIGN_OR_RETURN(lwe_enc_prng,
+                           rlwe::SingleThreadHkdfPrng::Create(prng_seed_enc));
+ 
+   } else {
+-    RLWE_ASSIGN_OR_RETURN(auto pad_prng, rlwe::SingleThreadChaChaPrng::Create(
+-                                             prng_seed_lwe_query_pad_));
+-    RLWE_ASSIGN_OR_RETURN(
+-        lwe_pad, lwe::ExpandPad(params_.db_cols, params_.lwe_secret_dim,
+-                                pad_prng.get()));
+     RLWE_ASSIGN_OR_RETURN(std::string prng_seed_enc,
+                           rlwe::SingleThreadChaChaPrng::GenerateSeed());
+     RLWE_ASSIGN_OR_RETURN(lwe_enc_prng,
+@@ -674,12 +653,7 @@ absl::StatusOr<std::tuple<VMatrix, lwe::Vector, lwe::SymmetricLweKey>> Client::C
+ 
+   start = currentDateTime();
+ 
+- 	VMatrix A_vsp(params_.db_cols, params_.lwe_secret_dim);
+   lwe::Vector sk_vsp = lwe::Vector::Zero(params_.lwe_secret_dim);
+-  lwe::Vector As = lwe::Vector::Zero(params_.db_cols);
+-
+-  convertToVeriSimplePIRMatrix(A_vsp, lwe_pad);
+-  //std::cout << YELLOW << "[ONLINE STATE]: Size of of A[0] (first row) " << (A_vsp.cols * sizeof(Elem))/(1ULL << 10) << " KB" << END << std::endl;
+ 
+   RLWE_ASSIGN_OR_RETURN(
+       lwe::SymmetricLweKey lwe_secret_key,
+@@ -688,10 +662,11 @@ absl::StatusOr<std::tuple<VMatrix, lwe::Vector, lwe::SymmetricLweKey>> Client::C
+   for (int i = 0; i < lwe_secret_key.Key().size(); i++) {
+     sk_vsp(i) = lwe_secret_key.Key()(i);
+   }
+-  VMatrix sk_vsp__ = convertToVeriSimplePIRColumnMatrix(sk_vsp);
+-  auto As_vsp = matMulVec(A_vsp, sk_vsp__);
+-  convertToVectorFromVeriSimplePIRColumnMatrix(As, As_vsp);
+-  
++  RLWE_ASSIGN_OR_RETURN(
++      lwe::Vector As,
++      main_preprocessor_->ComputePadTimesSecret(lwe_secret_key.Key()));
++  VMatrix As_vsp = convertToVeriSimplePIRColumnMatrix(As);
++
+   end = currentDateTime();
+   //std::cout << BLUE << "[==> TIMER  <==] Client A*s time: " << (end-start) << " ms | " << (end-start)/1000 << " sec" << END << std::endl;
+ 
+@@ -704,15 +679,9 @@ absl::StatusOr<HintlessPirRequest> Client::GenerateRequestWithoutQuery(int64_t i
+   }
+ 
+   // Step 1. Encrypting the selection vector under LWE.
+-  lwe::Matrix lwe_pad;
+   std::unique_ptr<rlwe::SecurePrng> lwe_enc_prng;
+   std::string prng_seed_linpir_sk;
+   if (params_.prng_type == rlwe::PRNG_TYPE_HKDF) {
+-    RLWE_ASSIGN_OR_RETURN(auto pad_prng, rlwe::SingleThreadHkdfPrng::Create(
+-                                             prng_seed_lwe_query_pad_));
+-    RLWE_ASSIGN_OR_RETURN(
+-        lwe_pad, lwe::ExpandPad(params_.db_cols, params_.lwe_secret_dim,
+-                                pad_prng.get()));
+     RLWE_ASSIGN_OR_RETURN(std::string prng_seed_enc,
+                           rlwe::SingleThreadHkdfPrng::GenerateSeed());
+     RLWE_ASSIGN_OR_RETURN(lwe_enc_prng,
+@@ -721,11 +690,6 @@ absl::StatusOr<HintlessPirRequest> Client::GenerateRequestWithoutQuery(int64_t i
+                           rlwe::SingleThreadHkdfPrng::GenerateSeed());
+ 
+   } else {
+-    RLWE_ASSIGN_OR_RETURN(auto pad_prng, rlwe::SingleThreadChaChaPrng::Create(
+-                                             prng_seed_lwe_query_pad_));
+-    RLWE_ASSIGN_OR_RETURN(
+-        lwe_pad, lwe::ExpandPad(params_.db_cols, params_.lwe_secret_dim,
+-                                pad_prng.get()));
+     RLWE_ASSIGN_OR_RETURN(std::string prng_seed_enc,
+                           rlwe::SingleThreadChaChaPrng::GenerateSeed());
+     RLWE_ASSIGN_OR_RETURN(lwe_enc_prng,
+@@ -734,22 +698,21 @@ absl::StatusOr<HintlessPirRequest> Client::GenerateRequestWithoutQuery(int64_t i
+                           rlwe::SingleThreadChaChaPrng::GenerateSeed());
+   }
+ 
+-  // Reduce pad modulo the prime (if prime used)
+-  uint64_t rows = lwe_pad.rows();
+-  uint64_t cols = lwe_pad.cols();
+-  for (uint64_t i = 0; i < rows; i++) {
+-    for (uint64_t j = 0; j < cols; j++) {
+-      lwe_pad(i, j) = fast_mod_max_64(lwe_pad(i, j));
+-    }
+-  }
+-
+   RLWE_ASSIGN_OR_RETURN(
+       lwe::SymmetricLweKey lwe_secret_key,
+       lwe::SymmetricLweKey::Sample(params_.lwe_secret_dim, lwe_enc_prng.get()));
++  RLWE_ASSIGN_OR_RETURN(
++      lwe::Vector main_as,
++      main_preprocessor_->ComputePadTimesSecret(lwe_secret_key.Key()));
+ 
+   // Choosing the largest scaling factor that supports our plaintext space
+   int log_scaling_factor =
+       params_.lwe_modulus_bit_size - params_.lwe_plaintext_bit_size;
++  lwe::Integer scaling_factor = static_cast<lwe::Integer>(SOL_NTT_PRIME) /
++                                (1 << params_.lwe_plaintext_bit_size);
++  if (scaling_factor == 0) {
++    scaling_factor = (1 << log_scaling_factor);
++  }
+ 
+   // Plaintext is a selection vector for col_idx
+   int64_t row_idx = index / params_.db_cols;
+@@ -758,10 +721,8 @@ absl::StatusOr<HintlessPirRequest> Client::GenerateRequestWithoutQuery(int64_t i
+   //query_vector[col_idx] = 1;
+   query_vsp_out[col_idx] = 1;
+ 
+-  //RLWE_RETURN_IF_ERROR(lwe_secret_key.EncryptFromPadInPlace(
+-  //    query_vector, lwe_pad, log_scaling_factor, lwe_enc_prng.get()));
+-  RLWE_RETURN_IF_ERROR(lwe_secret_key.EncryptFromPadInPlace(
+-      query_vsp_out, lwe_pad, log_scaling_factor, lwe_enc_prng.get()));
++  RLWE_RETURN_IF_ERROR(lwe_secret_key.EncryptFromPadInPlaceExplicitGivenAs(
++      query_vsp_out, main_as, scaling_factor, lwe_enc_prng.get()));
+ 
+   // Cache the per request state.
+   state_ = ClientState{.row_idx = row_idx,
+@@ -782,7 +743,7 @@ absl::StatusOr<HintlessPirRequest> Client::GenerateRequestWithoutQuery(int64_t i
+     lwe_sk_vsp_out(i) = lwe_secret_key.Key()(i);
+     //std::cout << "LWE SK OUT[" << i << "]: " << key_out(i) << std::endl;
+   }
+-  
++
+   return request;
+ }
+ 
+@@ -857,7 +818,7 @@ absl::Status Client::GenerateLinPirRequestInPlaceBSGS(
+                           gk_b.Serialize(rlwe_moduli_));
+   }
+   return absl::OkStatus();
+-} 
++}
+ 
+ std::vector<Client::RlweInteger> Client::EncodeLweVector(
+     const lwe::Vector& lwe_vector, RlweInteger lwe_modulus,
+@@ -888,7 +849,7 @@ absl::StatusOr<std::string> Client::RecoverRecord(
+   std::vector<lwe::Integer> values;
+   values.reserve(response.ct_records_size());
+   for (int i = 0; i < response.ct_records_size(); ++i) {
+-    
++
+     std::vector<lwe::Integer> ct_records =
+         DeserializeLweCiphertext(response.ct_records(i));
+     if (ct_records.size() != params_.db_rows) {
+@@ -899,7 +860,7 @@ absl::StatusOr<std::string> Client::RecoverRecord(
+ 
+     // Remove hint * s from the server response, which gives us \Delta * m + e.
+     lwe::Vector noisy_plaintext{{ct_records[state_.row_idx]}};
+-    
++
+     noisy_plaintext[0] -= decryption_parts[i][state_.row_idx];
+ 
+     // Remove the error e.
+@@ -924,7 +885,7 @@ absl::StatusOr<std::tuple<std::string, std::vector<lwe::Vector>, std::vector<std
+   int response_size = response.linpir_responses_size() / plaintext_moduli.size();
+   //std::cout << "response size " << response_size << std::endl;
+   //std::cout << "num shards " << num_shards << std::endl;
+-  
++
+   if (response.ct_records_size() != num_shards) {
+     return absl::InvalidArgumentError("`response` has incorrect size.");
+   }
+@@ -944,7 +905,7 @@ absl::StatusOr<std::tuple<std::string, std::vector<lwe::Vector>, std::vector<std
+   std::vector<std::vector<lwe::Integer>> pir_response_ct_vec(num_shards);
+   values.reserve(response.ct_records_size() * params_.db_stack_cells);
+   //pir_response_ct_vec.reserve(num_shards);
+-  
++
+   //assert(response.ct_records_size() == 1 && "Temporarily, only one decryption part is supported");
+   //std::cout << "A" << std::endl;
+   for (int i = 0; i < response.ct_records_size(); ++i) {
+@@ -972,7 +933,7 @@ absl::StatusOr<std::tuple<std::string, std::vector<lwe::Vector>, std::vector<std
+ 
+       // We only care about decrypting a specific entry, so we can ignore the rest
+       //noisy_plaintext[0] -= decryption_parts[i][state_.row_idx];
+-      
++
+       Elem64 tmp = ((Elem64)noisy_plaintext[0]) + ((Elem64)SOL_NTT_PRIME) - ((Elem64)decryption_parts[i][state_.row_idx]);
+       tmp = fast_mod_max_64(tmp);
+       noisy_plaintext[0] = static_cast<lwe::Integer>(tmp);
+@@ -992,7 +953,7 @@ absl::StatusOr<std::tuple<std::string, std::vector<lwe::Vector>, std::vector<std
+ 
+       // Extracting the coefficient from the 1 x 1 matrix noisy_plaintext.
+       values.push_back(noisy_plaintext.eval()(0)); // eval means lazy evaluation
+-    } 
++    }
+     else { // When stacking is implemented
+       //lwe::Vector noisy_plaintext;
+       //noisy_plaintext.reserve(params_.db_stack_cells);
+@@ -1002,7 +963,7 @@ absl::StatusOr<std::tuple<std::string, std::vector<lwe::Vector>, std::vector<std
+ 
+         // We only care about decrypting a specific entry, so we can ignore the rest
+         //noisy_plaintext[0] -= decryption_parts[i][state_.row_idx];
+-        
++
+         Elem64 tmp = ((Elem64)noisy_plaintext[0]) + ((Elem64)SOL_NTT_PRIME) - ((Elem64)decryption_parts[i][state_new_.row_idx_begin + j]);
+         tmp = fast_mod_max_64(tmp);
+         noisy_plaintext[0] = static_cast<lwe::Integer>(tmp);
+@@ -1052,7 +1013,7 @@ absl::StatusOr<std::tuple<std::string, std::vector<std::vector<lwe::Integer>>>>
+   int response_size = response.linpir_responses_size() / plaintext_moduli.size();
+   //std::cout << "response size " << response_size << std::endl;
+   //std::cout << "num shards " << num_shards << std::endl;
+-  
++
+   if (response.ct_records_size() != num_shards) {
+     return absl::InvalidArgumentError("`response` has incorrect size.");
+   }
+@@ -1066,7 +1027,7 @@ absl::StatusOr<std::tuple<std::string, std::vector<std::vector<lwe::Integer>>>>
+   std::vector<std::vector<lwe::Integer>> pir_response_ct_vec(num_shards);
+   values.reserve(response.ct_records_size() * params_.db_stack_cells);
+   //pir_response_ct_vec.reserve(num_shards);
+-  
++
+   //assert(response.ct_records_size() == 1 && "Temporarily, only one decryption part is supported");
+   //std::cout << "A" << std::endl;
+   for (int i = 0; i < response.ct_records_size(); ++i) {
+@@ -1094,7 +1055,7 @@ absl::StatusOr<std::tuple<std::string, std::vector<std::vector<lwe::Integer>>>>
+ 
+       // We only care about decrypting a specific entry, so we can ignore the rest
+       //noisy_plaintext[0] -= decryption_parts[i][state_.row_idx];
+-      
++
+       Elem64 tmp = ((Elem64)noisy_plaintext[0]) + ((Elem64)SOL_NTT_PRIME) - ((Elem64)decryption_parts[i][state_.row_idx]);
+       tmp = fast_mod_max_64(tmp);
+       noisy_plaintext[0] = static_cast<lwe::Integer>(tmp);
+@@ -1114,7 +1075,7 @@ absl::StatusOr<std::tuple<std::string, std::vector<std::vector<lwe::Integer>>>>
+ 
+       // Extracting the coefficient from the 1 x 1 matrix noisy_plaintext.
+       values.push_back(noisy_plaintext.eval()(0)); // eval means lazy evaluation
+-    } 
++    }
+     else { // When stacking is implemented
+       //lwe::Vector noisy_plaintext;
+       //noisy_plaintext.reserve(params_.db_stack_cells);
+@@ -1124,7 +1085,7 @@ absl::StatusOr<std::tuple<std::string, std::vector<std::vector<lwe::Integer>>>>
+ 
+         // We only care about decrypting a specific entry, so we can ignore the rest
+         //noisy_plaintext[0] -= decryption_parts[i][state_.row_idx];
+-        
++
+         Elem64 tmp = ((Elem64)noisy_plaintext[0]) + ((Elem64)SOL_NTT_PRIME) - ((Elem64)decryption_parts[i][state_new_.row_idx_begin + j]);
+         tmp = fast_mod_max_64(tmp);
+         noisy_plaintext[0] = static_cast<lwe::Integer>(tmp);
+@@ -1164,7 +1125,7 @@ absl::StatusOr<std::tuple<std::string, lwe::Vector, std::vector<lwe::Integer>>>
+   int response_size = response.linpir_responses_size() / plaintext_moduli.size();
+   //std::cout << "response size " << response_size << std::endl;
+   //std::cout << "num shards " << num_shards << std::endl;
+-  
++
+   if (response.ct_records_size() != num_shards) {
+     return absl::InvalidArgumentError("`response` has incorrect size.");
+   }
+@@ -1185,7 +1146,7 @@ absl::StatusOr<std::tuple<std::string, lwe::Vector, std::vector<lwe::Integer>>>
+   pir_response_ct.reserve(params_.db_rows);
+   assert(response.ct_records_size() == 1 && "Temporarily, only one decryption part is supported");
+   for (int i = 0; i < response.ct_records_size(); ++i) {
+-    
++
+     std::vector<lwe::Integer> ct_records =
+         DeserializeLweCiphertext(response.ct_records(i));
+     if (ct_records.size() != params_.db_rows) {
+@@ -1197,21 +1158,21 @@ absl::StatusOr<std::tuple<std::string, lwe::Vector, std::vector<lwe::Integer>>>
+     for (int j = 0; j < ct_records.size(); j++) {
+       pir_response_ct.push_back(ct_records[j]);
+     }
+-    
++
+ 
+     // Remove hint * s from the server response, which gives us \Delta * m + e.
+     // Vector of size 1
+     lwe::Vector noisy_plaintext{{ct_records[state_.row_idx]}};
+-    
++
+     // TODO: Make this prime modulo friendly so that result is modulo prime
+     // We only care about decrypting a specific entry, so we can ignore the rest
+     //noisy_plaintext[0] -= decryption_parts[i][state_.row_idx];
+-    
+-    
++
++
+     Elem64 tmp = ((Elem64)noisy_plaintext[0]) + ((Elem64)SOL_NTT_PRIME) - ((Elem64)decryption_parts[i][state_.row_idx]);
+     tmp = fast_mod_max_64(tmp);
+     noisy_plaintext[0] = static_cast<lwe::Integer>(tmp);
+-    
++
+ 
+     // Remove the error e.
+     int log_scaling_factor =
+@@ -1223,10 +1184,10 @@ absl::StatusOr<std::tuple<std::string, lwe::Vector, std::vector<lwe::Integer>>>
+     // TODO: Instead of log_scaling_factor, have full scaling factor. Rewrite RemoveErrorInPlace.
+     //RLWE_RETURN_IF_ERROR(
+     //    lwe::RemoveErrorInPlace(noisy_plaintext, log_scaling_factor));
+-    
++
+     RLWE_RETURN_IF_ERROR(
+         lwe::RemoveErrorInPlaceCustomMod(noisy_plaintext, scaling_factor, (1 << params_.lwe_plaintext_bit_size)));
+-    
++
+ 
+     // Extracting the coefficient from the 1 x 1 matrix noisy_plaintext.
+     values.push_back(noisy_plaintext.eval()(0));
+@@ -1262,8 +1223,8 @@ absl::StatusOr<std::pair<std::string, lwe::Vector>> Client::RecoverRecordGivenSi
+   //for (int i = 0; i < response.ct_records_size(); ++i) {
+   values.reserve(response_size);
+   assert(res_in.size() == response_size);
+-  for (int i = 0; i < response_size; ++i) {  
+-    
++  for (int i = 0; i < response_size; ++i) {
++
+     //std::vector<lwe::Integer> ct_records =
+     //    DeserializeLweCiphertext(response.ct_records(i));
+     std::vector<lwe::Integer> ct_records = res_in[i];
+@@ -1275,9 +1236,9 @@ absl::StatusOr<std::pair<std::string, lwe::Vector>> Client::RecoverRecordGivenSi
+ 
+     // Remove hint * s from the server response, which gives us \Delta * m + e.
+     lwe::Vector noisy_plaintext{{ct_records[state_.row_idx]}};
+-    
++
+     noisy_plaintext[0] -= decryption_parts[i][state_.row_idx];
+-    //std::cout << "Row index " << state_.row_idx << " Col index " << state_.col_idx << std::endl; 
++    //std::cout << "Row index " << state_.row_idx << " Col index " << state_.col_idx << std::endl;
+ 
+     // Remove the error e.
+     int log_scaling_factor =
+diff --git a/hintless_simplepir/client.h b/hintless_simplepir/client.h
+index 9268550..2c0bee1 100644
+--- a/hintless_simplepir/client.h
++++ b/hintless_simplepir/client.h
+@@ -27,6 +27,7 @@
+ #include "absl/status/status.h"
+ #include "absl/status/statusor.h"
+ #include "absl/strings/string_view.h"
++#include "hintless_simplepir/main_preprocessor.h"
+ #include "hintless_simplepir/parameters.h"
+ #include "hintless_simplepir/serialization.pb.h"
+ #include "linpir/client.h"
+@@ -49,7 +50,7 @@ class Client {
+       const Parameters& params,
+       const HintlessPirServerPublicParams& public_params);
+ 
+-  // Returns the request for accessing database[index]. 
++  // Returns the request for accessing database[index].
+   absl::StatusOr<HintlessPirRequest> GenerateRequest(int64_t index);
+ 
+   // Additionally returns secret key for VSPIR
+@@ -69,6 +70,16 @@ class Client {
+ 
+   absl::StatusOr<std::tuple<VMatrix, lwe::Vector, lwe::SymmetricLweKey>> Compute_A_times_s();
+ 
++  // Computes Z*A through the selected main preprocessing backend.  The
++  // verifier uses this instead of expanding a dense A matrix.
++  absl::StatusOr<VMatrix> MultiplyRightByMainPad(const VMatrix& left) const {
++    return main_preprocessor_->MultiplyRightByPad(left);
++  }
++
++  MainPreprocessorMetadata MainPreprocessorInfo() const {
++    return main_preprocessor_->Metadata();
++  }
++
+   // Also returns sk to be passed to VSPIR and doesn't generate a SimplePIR query b/c that is handled by VSPIR
+   absl::StatusOr<HintlessPirRequest> GenerateRequestWithoutQuery(int64_t index, lwe::Vector& lwe_sk_vsp_out, lwe::Vector& query_vsp_out);
+ 
+@@ -123,13 +134,15 @@ class Client {
+       std::vector<std::unique_ptr<const RlweRnsContext>> rlwe_contexts,
+       std::vector<const RlwePrimeModulus*> rlwe_moduli,
+       std::vector<std::unique_ptr<LinPirClient>> linpir_clients,
+-      RlweRnsContext crt_context)
++      RlweRnsContext crt_context,
++      std::unique_ptr<MainPreprocessor> main_preprocessor)
+       : params_(std::move(params)),
+         prng_seed_lwe_query_pad_(std::string(prng_seed_lwe_query_pad)),
+         rlwe_contexts_(std::move(rlwe_contexts)),
+         rlwe_moduli_(std::move(rlwe_moduli)),
+         linpir_clients_(std::move(linpir_clients)),
+-        crt_context_(std::move(crt_context)) {}
++        crt_context_(std::move(crt_context)),
++        main_preprocessor_(std::move(main_preprocessor)) {}
+ 
+   static std::vector<RlweInteger> EncodeLweVector(const lwe::Vector& lwe_vector,
+                                                   RlweInteger lwe_modulus,
+@@ -139,7 +152,7 @@ class Client {
+   // with the LinPir requests.
+   absl::Status GenerateLinPirRequestInPlace(
+       HintlessPirRequest& request, const lwe::Vector& lwe_secret) const;
+-    
++
+   absl::Status GenerateLinPirRequestInPlaceBSGS(
+     HintlessPirRequest& request, const lwe::Vector& lwe_secret) const;
+ 
+@@ -162,6 +175,8 @@ class Client {
+ 
+   const RlweRnsContext crt_context_;
+ 
++  const std::unique_ptr<MainPreprocessor> main_preprocessor_;
++
+   // Per request state.
+   ClientState state_;
+   ClientStateNew state_new_;
+diff --git a/hintless_simplepir/database_hwy.cc b/hintless_simplepir/database_hwy.cc
+index 9349aeb..e8b18ac 100644
+--- a/hintless_simplepir/database_hwy.cc
++++ b/hintless_simplepir/database_hwy.cc
+@@ -511,7 +511,7 @@ absl::Status Database::UpdateHints() {
+     }
+     std::cout << std::endl;
+     */
+-    
++
+     RLWE_ASSIGN_OR_RETURN(
+         hint_matrices_[i],
+         MatrixProduct(data_matrices_[i], lwe_matrix, params_.db_rows));
+@@ -536,6 +536,27 @@ absl::Status Database::UpdateHintsFake() {
+   return absl::OkStatus();
+ }
+ 
++absl::Status Database::SetHints(std::vector<LweMatrix> hint_matrices) {
++  if (hint_matrices.size() != data_matrices_.size()) {
++    return absl::InvalidArgumentError(
++        "hint matrix count must equal the number of database shards");
++  }
++  for (const LweMatrix& hint : hint_matrices) {
++    if (hint.size() != params_.db_rows) {
++      return absl::InvalidArgumentError(
++          "hint matrix row count does not match database parameters");
++    }
++    for (const LweVector& row : hint) {
++      if (row.size() != params_.lwe_secret_dim) {
++        return absl::InvalidArgumentError(
++            "hint matrix column count does not match LWE dimension");
++      }
++    }
++  }
++  hint_matrices_ = std::move(hint_matrices);
++  return absl::OkStatus();
++}
++
+ // Assume both `plain_matrix` and `lwe_matrix` are stored by columns.
+ absl::StatusOr<std::vector<Database::LweMatrix>> Database::TransposeMatrixProduct(
+     const Database::LweMatrix& lwe_matrix, bool secondary) const {
+@@ -749,7 +770,7 @@ absl::StatusOr<std::string> Database::RecordWithStacking(int64_t index) const {
+     int64_t base_bits = block_pos * 8 * sizeof(lwe::DBInteger);
+     block_locs.push_back(std::make_tuple(block_idx, block_pos, base_bits));
+   }
+-  
++
+   //int64_t block_idx_end = row_idx_end / num_values_per_block;
+   //int64_t block_pos_end = row_idx_end % num_values_per_block;
+   //int64_t base_bits = block_pos * 8 * sizeof(lwe::PlainInteger);
+diff --git a/hintless_simplepir/database_hwy.h b/hintless_simplepir/database_hwy.h
+index 0116cc0..69f27e6 100644
+--- a/hintless_simplepir/database_hwy.h
++++ b/hintless_simplepir/database_hwy.h
+@@ -84,6 +84,10 @@ class Database {
+   absl::StatusOr<std::vector<LweMatrix>> DirectMatrixProduct(
+     const LweMatrix& lwe_matrix, bool secondary = false) const;
+ 
++  // Installs hint matrices produced by a MainPreprocessor implementation.
++  // The layout is identical to UpdateHints(): shard, row, secret coefficient.
++  absl::Status SetHints(std::vector<LweMatrix> hint_matrices);
++
+   std::vector<LweMatrix> TransposeMatrixProductFake() const;
+ 
+   std::vector<LweMatrix64> TransposeMatrixProductFake64() const;
+@@ -109,6 +113,9 @@ class Database {
+   absl::StatusOr<std::string> RecordWithStacking(int64_t index) const;
+ 
+   absl::Span<const RawMatrix> Data() const { return data_matrices_; }
++  absl::Span<const RawMatrix> DataTranspose() const {
++    return data_matrices_transpose_;
++  }
+   absl::Span<const LweMatrix> Hints() const { return hint_matrices_; }
+   const lwe::Matrix* LweQueryPad() const { return lwe_query_pad_; }
+ 
+diff --git a/hintless_simplepir/main_preprocessor.cc b/hintless_simplepir/main_preprocessor.cc
+new file mode 100644
+index 0000000..f0547a3
+--- /dev/null
++++ b/hintless_simplepir/main_preprocessor.cc
+@@ -0,0 +1,423 @@
++// Copyright 2026
++// Licensed under the Apache License, Version 2.0.
++
++#include "hintless_simplepir/main_preprocessor.h"
++
++#include <algorithm>
++#include <array>
++#include <cstddef>
++#include <cstdint>
++#include <memory>
++#include <string>
++#include <utility>
++#include <vector>
++
++#include <openssl/sha.h>
++
++#include "absl/memory/memory.h"
++#include "absl/status/status.h"
++#include "absl/status/statusor.h"
++#include "absl/strings/str_cat.h"
++#include "hintless_simplepir/database_hwy.h"
++#include "hintless_simplepir/parameters.h"
++#include "lwe/lwe_symmetric_encryption.h"
++#include "lwe/matrix_conversion.h"
++#include "lwe/negacyclic_ntt.h"
++#include "lwe/types.h"
++#include "shell_encryption/prng/prng.h"
++#include "shell_encryption/prng/single_thread_chacha_prng.h"
++#include "shell_encryption/prng/single_thread_hkdf_prng.h"
++#include "shell_encryption/status_macros.h"
++
++namespace hintless_pir {
++namespace hintless_simplepir {
++namespace {
++
++constexpr uint64_t kMainModulus = SOL_NTT_PRIME;
++
++uint32_t AddMod(uint32_t lhs, uint32_t rhs) {
++  const uint64_t sum = static_cast<uint64_t>(lhs) + rhs;
++  return static_cast<uint32_t>(sum >= kMainModulus ? sum - kMainModulus
++                                                   : sum);
++}
++
++uint32_t MulMod(uint32_t lhs, uint32_t rhs) {
++  return static_cast<uint32_t>((static_cast<uint64_t>(lhs) * rhs) %
++                               kMainModulus);
++}
++
++uint32_t NegateMod(uint32_t value) {
++  return value == 0 ? 0 : static_cast<uint32_t>(kMainModulus - value);
++}
++
++absl::StatusOr<std::unique_ptr<rlwe::SecurePrng>> CreatePadPrng(
++    const Parameters& params, absl::string_view seed) {
++  if (params.prng_type == rlwe::PRNG_TYPE_HKDF) {
++    RLWE_ASSIGN_OR_RETURN(auto prng, rlwe::SingleThreadHkdfPrng::Create(seed));
++    return std::unique_ptr<rlwe::SecurePrng>(std::move(prng));
++  }
++  if (params.prng_type == rlwe::PRNG_TYPE_CHACHA) {
++    RLWE_ASSIGN_OR_RETURN(auto prng,
++                          rlwe::SingleThreadChaChaPrng::Create(seed));
++    return std::unique_ptr<rlwe::SecurePrng>(std::move(prng));
++  }
++  return absl::InvalidArgumentError("unsupported PRNG for main public pad");
++}
++
++absl::StatusOr<std::string> DeriveYpirPadSeed(
++    const Parameters& params, absl::string_view public_seed) {
++  size_t output_length;
++  if (params.prng_type == rlwe::PRNG_TYPE_HKDF) {
++    output_length = rlwe::SingleThreadHkdfPrng::SeedLength();
++  } else if (params.prng_type == rlwe::PRNG_TYPE_CHACHA) {
++    output_length = rlwe::SingleThreadChaChaPrng::SeedLength();
++  } else {
++    return absl::InvalidArgumentError("unsupported PRNG for YPIR pad seed");
++  }
++  if (output_length > SHA512_DIGEST_LENGTH) {
++    return absl::InternalError("YPIR pad seed length exceeds SHA-512 output");
++  }
++  std::string input;
++  input.reserve(sizeof(kYpirMainPadDomain) + public_seed.size());
++  input.append(kYpirMainPadDomain);
++  input.push_back('\0');
++  input.append(public_seed.data(), public_seed.size());
++  std::array<unsigned char, SHA512_DIGEST_LENGTH> digest{};
++  SHA512(reinterpret_cast<const unsigned char*>(input.data()), input.size(),
++         digest.data());
++  return std::string(reinterpret_cast<const char*>(digest.data()),
++                     output_length);
++}
++
++class DenseMainPreprocessor final : public MainPreprocessor {
++ public:
++  static absl::StatusOr<std::unique_ptr<DenseMainPreprocessor>> Create(
++      const Parameters& params, absl::string_view public_seed) {
++    RLWE_ASSIGN_OR_RETURN(auto prng, CreatePadPrng(params, public_seed));
++    RLWE_ASSIGN_OR_RETURN(
++        auto pad,
++        lwe::ExpandPad<rlwe::SecurePrng>(params.db_cols,
++                                        params.lwe_secret_dim, prng.get()));
++    return absl::WrapUnique(
++        new DenseMainPreprocessor(params, std::move(pad)));
++  }
++
++  absl::StatusOr<std::vector<Database::LweMatrix>> ComputeHint(
++      const Database& database) const override {
++    return database.DirectMatrixProduct(ImportLweMatrix(pad_));
++  }
++
++  absl::StatusOr<lwe::Vector> ComputePadTimesSecret(
++      const lwe::Vector& secret) const override {
++    if (secret.size() != params_.lwe_secret_dim) {
++      return absl::InvalidArgumentError(
++          "secret length does not match dense pad dimension");
++    }
++    lwe::Vector output = lwe::Vector::Zero(params_.db_cols);
++    for (int64_t row = 0; row < params_.db_cols; ++row) {
++      uint32_t accumulator = 0;
++      for (int col = 0; col < params_.lwe_secret_dim; ++col) {
++        accumulator = AddMod(
++            accumulator,
++            MulMod(pad_(row, col), secret(col) % kMainModulus));
++      }
++      output(row) = accumulator;
++    }
++    return output;
++  }
++
++  absl::StatusOr<VMatrix> MultiplyRightByPad(
++      const VMatrix& left) const override {
++    if (left.cols != static_cast<uint64_t>(params_.db_cols)) {
++      return absl::InvalidArgumentError(
++          "left matrix width does not match dense pad row count");
++    }
++    VMatrix output(left.rows, params_.lwe_secret_dim);
++    for (uint64_t row = 0; row < left.rows; ++row) {
++      for (int col = 0; col < params_.lwe_secret_dim; ++col) {
++        uint32_t accumulator = 0;
++        for (int64_t k = 0; k < params_.db_cols; ++k) {
++          accumulator = AddMod(
++              accumulator,
++              MulMod(left.getElem(row, k) % kMainModulus, pad_(k, col)));
++        }
++        output.data[row * output.cols + col] = accumulator;
++      }
++    }
++    return output;
++  }
++
++  MainPreprocessorMetadata Metadata() const override {
++    return MainPreprocessorMetadata{
++        .backend = MainPreprocessorBackend::kDenseLwe,
++        .backend_name = "dense-lwe",
++        .ring_degree = 0,
++        .pad_block_count = 0,
++        .structured_pad_version = 0,
++        .modulus = kMainModulus,
++        .secret_dimension = params_.lwe_secret_dim,
++        .prg_domain = "small-client-pir/main-pad/dense-lwe/legacy",
++        .security_status = "baseline-lwe",
++    };
++  }
++
++  const lwe::Matrix* DensePadIfMaterialized() const override { return &pad_; }
++
++  absl::StatusOr<lwe::Matrix> MaterializePadForTesting() const override {
++    return pad_;
++  }
++
++ private:
++  DenseMainPreprocessor(Parameters params, lwe::Matrix pad)
++      : params_(std::move(params)), pad_(std::move(pad)) {}
++
++  const Parameters params_;
++  const lwe::Matrix pad_;
++};
++
++class YpirMainPreprocessor final : public MainPreprocessor {
++ public:
++  static absl::StatusOr<std::unique_ptr<YpirMainPreprocessor>> Create(
++      const Parameters& params, absl::string_view public_seed) {
++    if (params.main_ring_log_n <= 0 || params.main_ring_log_n >= 31) {
++      return absl::InvalidArgumentError(
++          "YPIR main ring log degree must be in [1, 30]");
++    }
++    const int degree = 1 << params.main_ring_log_n;
++    if (params.lwe_secret_dim != degree) {
++      return absl::InvalidArgumentError(absl::StrCat(
++          "YPIR main requires lwe_secret_dim == ring degree; got ",
++          params.lwe_secret_dim, " and ", degree));
++    }
++    if (params.db_cols % degree != 0) {
++      return absl::InvalidArgumentError(
++          "YPIR main requires db_cols to be divisible by ring degree");
++    }
++    const int block_count = params.db_cols / degree;
++    if (params.main_pad_block_count != block_count) {
++      return absl::InvalidArgumentError(absl::StrCat(
++          "YPIR main pad block count mismatch: got ",
++          params.main_pad_block_count, ", derived ", block_count));
++    }
++    if (params.structured_pad_version != kYpirStructuredPadVersion) {
++      return absl::InvalidArgumentError(
++          "unsupported YPIR structured pad version");
++    }
++
++    RLWE_ASSIGN_OR_RETURN(auto ntt,
++                          lwe::NegacyclicNtt::Create(kMainModulus,
++                                                    params.main_ring_log_n));
++    RLWE_ASSIGN_OR_RETURN(const std::string domain_seed,
++                          DeriveYpirPadSeed(params, public_seed));
++    RLWE_ASSIGN_OR_RETURN(auto prng, CreatePadPrng(params, domain_seed));
++    RLWE_ASSIGN_OR_RETURN(
++        auto sampled,
++        lwe::ExpandPad<rlwe::SecurePrng>(block_count, degree, prng.get()));
++
++    std::vector<std::vector<uint32_t>> blocks(block_count,
++                                               std::vector<uint32_t>(degree));
++    std::vector<lwe::NegacyclicNtt::Polynomial> blocks_ntt;
++    std::vector<lwe::NegacyclicNtt::Polynomial> transpose_blocks_ntt;
++    blocks_ntt.reserve(block_count);
++    transpose_blocks_ntt.reserve(block_count);
++    for (int block = 0; block < block_count; ++block) {
++      for (int i = 0; i < degree; ++i) {
++        blocks[block][i] = sampled(block, i);
++      }
++      RLWE_ASSIGN_OR_RETURN(auto block_ntt, ntt->Forward(blocks[block]));
++      blocks_ntt.push_back(std::move(block_ntt));
++
++      // If NC(a)[i,j] = a[j-i] with negacyclic wrap, then NC(a)*s is
++      // the negacyclic convolution of (a0,-aN-1,...,-a1) with s.
++      std::vector<uint32_t> transposed(degree);
++      transposed[0] = blocks[block][0];
++      for (int i = 1; i < degree; ++i) {
++        transposed[i] = NegateMod(blocks[block][degree - i]);
++      }
++      RLWE_ASSIGN_OR_RETURN(auto transpose_ntt, ntt->Forward(transposed));
++      transpose_blocks_ntt.push_back(std::move(transpose_ntt));
++    }
++    return absl::WrapUnique(new YpirMainPreprocessor(
++        params, std::move(ntt), std::move(blocks), std::move(blocks_ntt),
++        std::move(transpose_blocks_ntt)));
++  }
++
++  absl::StatusOr<std::vector<Database::LweMatrix>> ComputeHint(
++      const Database& database) const override {
++    absl::Span<const Database::RawMatrix> shards = database.DataTranspose();
++    if (shards.size() != database.NumShards()) {
++      return absl::InternalError("database transpose shard count mismatch");
++    }
++    std::vector<Database::LweMatrix> output(shards.size());
++    const int degree = ntt_->degree();
++    const int values_per_word =
++        sizeof(Database::BlockType) / sizeof(lwe::DBInteger);
++    const uint32_t db_mask = params_.lwe_plaintext_bit_size == 8
++                                 ? 0xffu
++                                 : ((uint32_t{1}
++                                     << params_.lwe_plaintext_bit_size) -
++                                    1);
++
++    for (size_t shard = 0; shard < shards.size(); ++shard) {
++      if (shards[shard].size() != params_.db_rows) {
++        return absl::InvalidArgumentError(
++            "database transpose row count mismatch");
++      }
++      Database::LweMatrix& hint = output[shard];
++      hint.resize(params_.db_rows);
++      std::vector<uint32_t> coefficients(degree);
++      for (int64_t row = 0; row < params_.db_rows; ++row) {
++        if (shards[shard][row].size() * values_per_word < params_.db_cols) {
++          return absl::InvalidArgumentError(
++              "packed database transpose row is too short");
++        }
++        auto accumulator = ntt_->ZeroNtt();
++        for (int block = 0; block < params_.main_pad_block_count; ++block) {
++          const int64_t base_col = static_cast<int64_t>(block) * degree;
++          for (int i = 0; i < degree; ++i) {
++            const int64_t col = base_col + i;
++            const int64_t word = col / values_per_word;
++            const int shift = (col % values_per_word) * 8;
++            coefficients[i] = static_cast<uint32_t>(
++                (shards[shard][row][word] >> shift) & db_mask);
++          }
++          RLWE_ASSIGN_OR_RETURN(auto data_ntt, ntt_->Forward(coefficients));
++          RLWE_RETURN_IF_ERROR(ntt_->FusedMultiplyAddInPlace(
++              accumulator, data_ntt, blocks_ntt_[block]));
++        }
++        RLWE_ASSIGN_OR_RETURN(hint[row], ntt_->Inverse(accumulator));
++      }
++    }
++    return output;
++  }
++
++  absl::StatusOr<lwe::Vector> ComputePadTimesSecret(
++      const lwe::Vector& secret) const override {
++    const int degree = ntt_->degree();
++    if (secret.size() != degree) {
++      return absl::InvalidArgumentError(
++          "secret length does not match YPIR ring degree");
++    }
++    std::vector<uint32_t> secret_coefficients(degree);
++    for (int i = 0; i < degree; ++i) {
++      secret_coefficients[i] = secret(i) % kMainModulus;
++    }
++    RLWE_ASSIGN_OR_RETURN(auto secret_ntt,
++                          ntt_->Forward(secret_coefficients));
++    lwe::Vector output(params_.db_cols);
++    for (int block = 0; block < params_.main_pad_block_count; ++block) {
++      auto product = transpose_blocks_ntt_[block];
++      RLWE_RETURN_IF_ERROR(ntt_->MultiplyInPlace(product, secret_ntt));
++      RLWE_ASSIGN_OR_RETURN(auto coefficients, ntt_->Inverse(product));
++      for (int i = 0; i < degree; ++i) {
++        output(block * degree + i) = coefficients[i];
++      }
++    }
++    return output;
++  }
++
++  absl::StatusOr<VMatrix> MultiplyRightByPad(
++      const VMatrix& left) const override {
++    if (left.cols != static_cast<uint64_t>(params_.db_cols)) {
++      return absl::InvalidArgumentError(
++          "left matrix width does not match YPIR pad row count");
++    }
++    const int degree = ntt_->degree();
++    VMatrix output(left.rows, degree);
++    std::vector<uint32_t> coefficients(degree);
++    for (uint64_t row = 0; row < left.rows; ++row) {
++      auto accumulator = ntt_->ZeroNtt();
++      for (int block = 0; block < params_.main_pad_block_count; ++block) {
++        for (int i = 0; i < degree; ++i) {
++          coefficients[i] = left.getElem(row, block * degree + i) %
++                            kMainModulus;
++        }
++        RLWE_ASSIGN_OR_RETURN(auto left_ntt, ntt_->Forward(coefficients));
++        RLWE_RETURN_IF_ERROR(ntt_->FusedMultiplyAddInPlace(
++            accumulator, left_ntt, blocks_ntt_[block]));
++      }
++      RLWE_ASSIGN_OR_RETURN(auto result, ntt_->Inverse(accumulator));
++      std::copy(result.begin(), result.end(), output.data + row * degree);
++    }
++    return output;
++  }
++
++  MainPreprocessorMetadata Metadata() const override {
++    return MainPreprocessorMetadata{
++        .backend = MainPreprocessorBackend::kYpirNtt,
++        .backend_name = "ypir-exact-ntt",
++        .ring_degree = ntt_->degree(),
++        .pad_block_count = params_.main_pad_block_count,
++        .structured_pad_version = params_.structured_pad_version,
++        .modulus = kMainModulus,
++        .secret_dimension = params_.lwe_secret_dim,
++        .prg_domain = kYpirMainPadDomain,
++        .security_status =
++            "experimental-ring-lwe-ring-sis-parameters-not-audited",
++    };
++  }
++
++  const lwe::Matrix* DensePadIfMaterialized() const override {
++    return nullptr;
++  }
++
++  absl::StatusOr<lwe::Matrix> MaterializePadForTesting() const override {
++    const int degree = ntt_->degree();
++    lwe::Matrix output(params_.db_cols, degree);
++    for (int block = 0; block < params_.main_pad_block_count; ++block) {
++      for (int row = 0; row < degree; ++row) {
++        for (int col = 0; col < degree; ++col) {
++          const int delta = col - row;
++          output(block * degree + row, col) =
++              delta >= 0 ? blocks_[block][delta]
++                         : NegateMod(blocks_[block][degree + delta]);
++        }
++      }
++    }
++    return output;
++  }
++
++ private:
++  YpirMainPreprocessor(
++      Parameters params, std::unique_ptr<lwe::NegacyclicNtt> ntt,
++      std::vector<std::vector<uint32_t>> blocks,
++      std::vector<lwe::NegacyclicNtt::Polynomial> blocks_ntt,
++      std::vector<lwe::NegacyclicNtt::Polynomial> transpose_blocks_ntt)
++      : params_(std::move(params)),
++        ntt_(std::move(ntt)),
++        blocks_(std::move(blocks)),
++        blocks_ntt_(std::move(blocks_ntt)),
++        transpose_blocks_ntt_(std::move(transpose_blocks_ntt)) {}
++
++  const Parameters params_;
++  const std::unique_ptr<lwe::NegacyclicNtt> ntt_;
++  const std::vector<std::vector<uint32_t>> blocks_;
++  const std::vector<lwe::NegacyclicNtt::Polynomial> blocks_ntt_;
++  const std::vector<lwe::NegacyclicNtt::Polynomial> transpose_blocks_ntt_;
++};
++
++}  // namespace
++
++absl::StatusOr<std::unique_ptr<MainPreprocessor>> CreateMainPreprocessor(
++    const Parameters& params, absl::string_view public_seed) {
++  if (kMainModulus == 0 || kMainModulus > UINT32_MAX) {
++    return absl::FailedPreconditionError(
++        "main preprocessing requires the configured 32-bit Solinas prime");
++  }
++  if (params.main_preprocessor_backend ==
++      MainPreprocessorBackend::kDenseLwe) {
++    RLWE_ASSIGN_OR_RETURN(auto dense,
++                          DenseMainPreprocessor::Create(params, public_seed));
++    return std::unique_ptr<MainPreprocessor>(std::move(dense));
++  }
++  if (params.main_preprocessor_backend ==
++      MainPreprocessorBackend::kYpirNtt) {
++    RLWE_ASSIGN_OR_RETURN(auto ypir,
++                          YpirMainPreprocessor::Create(params, public_seed));
++    return std::unique_ptr<MainPreprocessor>(std::move(ypir));
++  }
++  return absl::InvalidArgumentError("unknown main preprocessing backend");
++}
++
++}  // namespace hintless_simplepir
++}  // namespace hintless_pir
+diff --git a/hintless_simplepir/main_preprocessor.h b/hintless_simplepir/main_preprocessor.h
+new file mode 100644
+index 0000000..dd54e08
+--- /dev/null
++++ b/hintless_simplepir/main_preprocessor.h
+@@ -0,0 +1,69 @@
++// Copyright 2026
++// Licensed under the Apache License, Version 2.0.
++
++#ifndef HINTLESS_PIR_HINTLESS_SIMPLEPIR_MAIN_PREPROCESSOR_H_
++#define HINTLESS_PIR_HINTLESS_SIMPLEPIR_MAIN_PREPROCESSOR_H_
++
++#include <cstdint>
++#include <memory>
++#include <string>
++#include <vector>
++
++#include "absl/status/statusor.h"
++#include "absl/strings/string_view.h"
++#include "hintless_simplepir/database_hwy.h"
++#include "hintless_simplepir/parameters.h"
++#include "lwe/matrix_conversion.h"
++#include "lwe/negacyclic_ntt.h"
++#include "lwe/types.h"
++
++namespace hintless_pir {
++namespace hintless_simplepir {
++
++inline constexpr char kYpirMainPadDomain[] =
++    "small-client-pir/main-pad/ypir-ntt/v1";
++inline constexpr int kYpirStructuredPadVersion = 1;
++
++struct MainPreprocessorMetadata {
++  MainPreprocessorBackend backend;
++  std::string backend_name;
++  int ring_degree;
++  int pad_block_count;
++  int structured_pad_version;
++  uint64_t modulus;
++  int secret_dimension;
++  std::string prg_domain;
++  std::string security_status;
++};
++
++// Uniform interface consumed by the server, client and verifier for the main
++// SimplePIR public pad.  Implementations must return canonical coefficients in
++// Z_q and retain the existing row-major H/As/ZA layouts.
++class MainPreprocessor {
++ public:
++  virtual ~MainPreprocessor() = default;
++
++  virtual absl::StatusOr<std::vector<Database::LweMatrix>> ComputeHint(
++      const Database& database) const = 0;
++  virtual absl::StatusOr<lwe::Vector> ComputePadTimesSecret(
++      const lwe::Vector& secret) const = 0;
++  virtual absl::StatusOr<VMatrix> MultiplyRightByPad(
++      const VMatrix& left) const = 0;
++  virtual MainPreprocessorMetadata Metadata() const = 0;
++
++  // Non-null only for the legacy dense backend.  This preserves the existing
++  // diagnostic accessor without forcing the YPIR backend to allocate A.
++  virtual const lwe::Matrix* DensePadIfMaterialized() const = 0;
++
++  // This method is intentionally test/debug-only.  Production YPIR paths do
++  // not materialize the db_cols x secret_dimension public matrix.
++  virtual absl::StatusOr<lwe::Matrix> MaterializePadForTesting() const = 0;
++};
++
++absl::StatusOr<std::unique_ptr<MainPreprocessor>> CreateMainPreprocessor(
++    const Parameters& params, absl::string_view public_seed);
++
++}  // namespace hintless_simplepir
++}  // namespace hintless_pir
++
++#endif  // HINTLESS_PIR_HINTLESS_SIMPLEPIR_MAIN_PREPROCESSOR_H_
+diff --git a/hintless_simplepir/main_preprocessor_test.cc b/hintless_simplepir/main_preprocessor_test.cc
+new file mode 100644
+index 0000000..a2ff090
+--- /dev/null
++++ b/hintless_simplepir/main_preprocessor_test.cc
+@@ -0,0 +1,191 @@
++// Copyright 2026
++// Licensed under the Apache License, Version 2.0.
++
++#include "hintless_simplepir/main_preprocessor.h"
++
++#include <cstdint>
++#include <memory>
++#include <string>
++#include <vector>
++
++#include "gmock/gmock.h"
++#include "gtest/gtest.h"
++#include "hintless_simplepir/database_hwy.h"
++#include "hintless_simplepir/parameters.h"
++#include "lwe/matrix_conversion.h"
++#include "lwe/negacyclic_ntt.h"
++#include "shell_encryption/prng/single_thread_hkdf_prng.h"
++#include "shell_encryption/testing/status_matchers.h"
++#include "shell_encryption/testing/status_testing.h"
++
++namespace hintless_pir {
++namespace hintless_simplepir {
++namespace {
++
++using ::rlwe::testing::StatusIs;
++
++constexpr uint64_t kModulus = SOL_NTT_PRIME;
++
++uint32_t AddMod(uint32_t lhs, uint32_t rhs) {
++  uint64_t sum = static_cast<uint64_t>(lhs) + rhs;
++  return static_cast<uint32_t>(sum >= kModulus ? sum - kModulus : sum);
++}
++
++uint32_t MulMod(uint32_t lhs, uint32_t rhs) {
++  return static_cast<uint32_t>((static_cast<uint64_t>(lhs) * rhs) %
++                               kModulus);
++}
++
++std::vector<uint32_t> NaiveNegacyclic(
++    const std::vector<uint32_t>& lhs, const std::vector<uint32_t>& rhs) {
++  const int degree = lhs.size();
++  std::vector<uint32_t> output(degree, 0);
++  for (int i = 0; i < degree; ++i) {
++    for (int j = 0; j < degree; ++j) {
++      uint32_t term = MulMod(lhs[i], rhs[j]);
++      int index = i + j;
++      if (index >= degree) {
++        index -= degree;
++        term = term == 0 ? 0 : static_cast<uint32_t>(kModulus - term);
++      }
++      output[index] = AddMod(output[index], term);
++    }
++  }
++  return output;
++}
++
++Parameters SmallYpirParameters() {
++  Parameters params{};
++  params.db_rows = 4;
++  params.db_cols = 16;
++  params.db_record_bit_size = 8;
++  params.lwe_secret_dim = 8;
++  params.offline_lwe_secret_dim = 8;
++  params.lwe_modulus_bit_size = 32;
++  params.lwe_plaintext_bit_size = 8;
++  params.db_stack_cells = 1;
++  params.lwe_error_variance = 8;
++  params.prng_type = rlwe::PRNG_TYPE_HKDF;
++  params.main_preprocessor_backend = MainPreprocessorBackend::kYpirNtt;
++  params.main_ring_log_n = 3;
++  params.main_pad_block_count = 2;
++  params.structured_pad_version = kYpirStructuredPadVersion;
++  return params;
++}
++
++TEST(NegacyclicNttTest, MatchesNaiveExactArithmetic) {
++  ASSERT_OK_AND_ASSIGN(auto ntt, lwe::NegacyclicNtt::Create(kModulus, 3));
++  std::vector<uint32_t> lhs = {
++      0, 1, static_cast<uint32_t>(kModulus - 1), 17, 29, 31, 37, 41};
++  std::vector<uint32_t> rhs = {
++      43, 47, 53, 59, 61, 67, 71, static_cast<uint32_t>(kModulus - 2)};
++  ASSERT_OK_AND_ASSIGN(auto actual, ntt->Multiply(lhs, rhs));
++  EXPECT_EQ(actual, NaiveNegacyclic(lhs, rhs));
++}
++
++TEST(YpirMainPreprocessorTest, HAsAndZaMatchMaterializedPadElementwise) {
++  Parameters params = SmallYpirParameters();
++  const std::string seed(rlwe::SingleThreadHkdfPrng::SeedLength(), '\x5a');
++  ASSERT_OK_AND_ASSIGN(auto preprocessor,
++                       CreateMainPreprocessor(params, seed));
++  ASSERT_OK_AND_ASSIGN(lwe::Matrix pad,
++                       preprocessor->MaterializePadForTesting());
++
++  lwe::Vector secret(params.lwe_secret_dim);
++  for (int i = 0; i < secret.size(); ++i) {
++    secret(i) = i % 3 == 0 ? static_cast<uint32_t>(kModulus - 1)
++                           : static_cast<uint32_t>(i % 2);
++  }
++  ASSERT_OK_AND_ASSIGN(lwe::Vector actual_as,
++                       preprocessor->ComputePadTimesSecret(secret));
++  for (int row = 0; row < params.db_cols; ++row) {
++    uint32_t expected = 0;
++    for (int col = 0; col < params.lwe_secret_dim; ++col) {
++      expected = AddMod(expected, MulMod(pad(row, col), secret(col)));
++    }
++    EXPECT_EQ(actual_as(row), expected) << "As row " << row;
++  }
++
++  VMatrix left(3, params.db_cols);
++  for (uint64_t row = 0; row < left.rows; ++row) {
++    for (uint64_t col = 0; col < left.cols; ++col) {
++      left.data[row * left.cols + col] =
++          static_cast<uint32_t>(13 * row + 7 * col + 3);
++    }
++  }
++  ASSERT_OK_AND_ASSIGN(VMatrix actual_za,
++                       preprocessor->MultiplyRightByPad(left));
++  for (uint64_t row = 0; row < left.rows; ++row) {
++    for (int col = 0; col < params.lwe_secret_dim; ++col) {
++      uint32_t expected = 0;
++      for (int k = 0; k < params.db_cols; ++k) {
++        expected = AddMod(
++            expected, MulMod(left.getElem(row, k), pad(k, col)));
++      }
++      EXPECT_EQ(actual_za.getElem(row, col), expected)
++          << "ZA(" << row << "," << col << ")";
++    }
++  }
++
++  ASSERT_OK_AND_ASSIGN(auto database, Database::CreateFast(params));
++  ASSERT_OK_AND_ASSIGN(auto actual_hints,
++                       preprocessor->ComputeHint(*database));
++  ASSERT_OK_AND_ASSIGN(
++      auto expected_hints,
++      database->DirectMatrixProduct(ImportLweMatrix(pad)));
++  ASSERT_EQ(actual_hints.size(), expected_hints.size());
++  for (size_t shard = 0; shard < actual_hints.size(); ++shard) {
++    ASSERT_EQ(actual_hints[shard].size(), expected_hints[shard].size());
++    for (size_t row = 0; row < actual_hints[shard].size(); ++row) {
++      EXPECT_EQ(actual_hints[shard][row], expected_hints[shard][row])
++          << "H shard " << shard << ", row " << row;
++    }
++  }
++
++  MainPreprocessorMetadata metadata = preprocessor->Metadata();
++  EXPECT_EQ(metadata.backend, MainPreprocessorBackend::kYpirNtt);
++  EXPECT_EQ(metadata.ring_degree, 8);
++  EXPECT_EQ(metadata.pad_block_count, 2);
++  EXPECT_EQ(metadata.modulus, kModulus);
++  EXPECT_EQ(metadata.prg_domain, kYpirMainPadDomain);
++}
++
++TEST(YpirMainPreprocessorTest, RejectsSilentDimensionTruncation) {
++  Parameters params = SmallYpirParameters();
++  params.lwe_secret_dim = 7;
++  const std::string seed(rlwe::SingleThreadHkdfPrng::SeedLength(), '\x3c');
++  EXPECT_THAT(CreateMainPreprocessor(params, seed),
++              StatusIs(absl::StatusCode::kInvalidArgument));
++}
++
++TEST(YpirMainPreprocessorTest, PadsAreNonzeroAndDomainSeparated) {
++  Parameters ypir_params = SmallYpirParameters();
++  Parameters dense_params = ypir_params;
++  dense_params.main_preprocessor_backend = MainPreprocessorBackend::kDenseLwe;
++  const std::string seed(rlwe::SingleThreadHkdfPrng::SeedLength(), '\x27');
++
++  ASSERT_OK_AND_ASSIGN(auto ypir, CreateMainPreprocessor(ypir_params, seed));
++  ASSERT_OK_AND_ASSIGN(auto dense, CreateMainPreprocessor(dense_params, seed));
++  ASSERT_OK_AND_ASSIGN(lwe::Matrix ypir_pad,
++                       ypir->MaterializePadForTesting());
++  ASSERT_OK_AND_ASSIGN(lwe::Matrix dense_pad,
++                       dense->MaterializePadForTesting());
++
++  bool ypir_has_nonzero = false;
++  bool dense_has_nonzero = false;
++  bool pads_differ = false;
++  for (int row = 0; row < ypir_params.db_cols; ++row) {
++    for (int col = 0; col < ypir_params.lwe_secret_dim; ++col) {
++      ypir_has_nonzero |= ypir_pad(row, col) != 0;
++      dense_has_nonzero |= dense_pad(row, col) != 0;
++      pads_differ |= ypir_pad(row, col) != dense_pad(row, col);
++    }
++  }
++  EXPECT_TRUE(ypir_has_nonzero);
++  EXPECT_TRUE(dense_has_nonzero);
++  EXPECT_TRUE(pads_differ);
++}
++
++}  // namespace
++}  // namespace hintless_simplepir
++}  // namespace hintless_pir
+diff --git a/hintless_simplepir/new_pir_test.cc b/hintless_simplepir/new_pir_test.cc
+index 0a20957..6f59313 100644
+--- a/hintless_simplepir/new_pir_test.cc
++++ b/hintless_simplepir/new_pir_test.cc
+@@ -18,6 +18,7 @@
+ #include "verisimplepir/src/lib/pir/pir.h"
+ 
+ #include <memory>
++#include <cstring>
+ #include <string>
+ #include <tuple>
+ #include <utility>
+@@ -34,6 +35,7 @@
+ #include "lwe/matrix_conversion.h"
+ #include "hintless_simplepir/client.h"
+ #include "hintless_simplepir/database_hwy.h"
++#include "hintless_simplepir/offline_preprocessor.h"
+ #include "hintless_simplepir/parameters.h"
+ #include "hintless_simplepir/server.h"
+ #include "linpir/parameters.h"
+@@ -45,11 +47,11 @@ namespace {
+ 
+ using RlweInteger = Parameters::RlweInteger;
+ 
+-const int rows_db = 2048;
+-const int cols_db = 1024;
++const int rows_db = 32768;
++const int cols_db = 16384;
+ bool use_static_db = true;
+ 
+-const Parameters kParameters{
++Parameters kParameters{
+     .db_rows = rows_db,
+     .db_cols = cols_db,
+     .db_record_bit_size = 8, // Don't include stacking here.
+@@ -57,18 +59,18 @@ const Parameters kParameters{
+     .offline_lwe_secret_dim = 2816,
+     .lwe_modulus_bit_size = 32,
+     .lwe_plaintext_bit_size = 8, // <= 8
+-    .db_stack_cells = 1,
++    .db_stack_cells = 8,
+     .lwe_error_variance = 8,
+     .linpir_params =
+         linpir::RlweParameters<RlweInteger>{
+-            .log_n = 12, 
+-            .qs = {72057594021150721ULL, 72057589742960641ULL}, 
++            .log_n = 12,
++            .qs = {72057594021150721ULL, 72057589742960641ULL},
+ #ifdef SH_RUN
+             .ts = {2056193, 1990657},
+-#else //SH_RUN 
++#else //SH_RUN
+             .ts = {SOL_NTT_PRIME},
+ #endif //SH_RUN
+-            .gadget_log_bs = {16, 16}, 
++            .gadget_log_bs = {16, 16},
+             .error_variance = 8,
+             .prng_type = rlwe::PRNG_TYPE_HKDF,
+ #ifdef BSGS
+@@ -81,6 +83,8 @@ const Parameters kParameters{
+     .prng_type = rlwe::PRNG_TYPE_HKDF,
+ };
+ 
++std::string preproc_profile = "baseline";
++
+ // Client's query index. This is database entry that the client will access via PIR
+ uint64_t index = cols_db - 4; // 4-th column from the right starting at 0th row (indexing from 0).
+ 
+@@ -105,6 +109,39 @@ uint64_t index = cols_db - 4; // 4-th column from the right starting at 0th row
+ #define CLIENT_Q_VER_MS "Query: Client Verification (ms)"
+ #define LONG_TERM_STATE_KB "Long Term State (KiB)"
+ 
++bool IsImportantStage0Timing(const char* stage) {
++  static constexpr const char* kImportantStages[] = {
++      "main_preprocess_bsgs_call",
++      "client_create_main_pad_backend",
++      "offline_A2_generate",
++      "offline_H2_matrix_product",
++      "offline_challenge_encrypt",
++      "offline_DT_ciphertexts_product",
++      "offline_recover_Z",
++      "total",
++      "main_pad_times_secret",
++      "database_Du",
++      "total_without_prepare",
++  };
++  for (const char* important_stage : kImportantStages) {
++    if (std::strcmp(stage, important_stage) == 0) {
++      return true;
++    }
++  }
++  return false;
++}
++
++void PrintStage0Timing(const char* scope, const char* stage,
++                       double start_ms, double end_ms) {
++  if (!IsImportantStage0Timing(stage)) {
++    return;
++  }
++  const double duration_ms = end_ms - start_ms;
++  std::cout << "[STAGE0_TIMING] scope=" << scope << " stage=" << stage
++            << " duration_ms=" << duration_ms
++            << " duration_s=" << duration_ms / 1000 << std::endl;
++}
++
+ TEST(HintlessSimplePir, EndToEndPIRTest) {
+   // Some calculation around client's query index given how database is laid out
+   uint64_t row_idx_start = index / cols_db;
+@@ -136,7 +173,7 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+   dict[CLIENT_Q_DEC_MS] = 0;
+   dict[CLIENT_Q_VER_MS] = 0;
+   dict[LONG_TERM_STATE_KB] = 0;
+-  
++
+   const uint64_t row_in = kParameters.db_rows;
+   const uint64_t col_in = kParameters.db_cols;
+   const uint64_t lattice_n_in = kParameters.lwe_secret_dim;
+@@ -144,7 +181,7 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+   const uint64_t d_in = kParameters.db_record_bit_size;
+   const uint64_t N = row_in * col_in;
+   const uint64_t logp_in = kParameters.lwe_plaintext_bit_size;
+-  
++
+   std::cout << "Input params: N = " << N << " d = " << d_in << std::endl;
+   std::cout << "database size: " << N*d_in / (8.0*(1ULL<<30)) << " GiB\n";
+   std::cout << "Rows per block: " << kParameters.linpir_params.rows_per_block << std::endl;
+@@ -193,8 +230,9 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+   }
+ #endif //FAKE_RUN
+   end = currentDateTime();
+-  //std::cout << "[==> TIMER  <==] Server database creation and transpose time: " << (end-start) << " ms | " << (end-start)/1000 << " sec" << std::endl;
+-  
++  PrintStage0Timing("global", "server_database_create_and_transpose", start,
++                    end);
++
+   const Database* database = server->GetDatabase();
+   // Preprocess the server and get public parameters.
+   start_prep = currentDateTime();
+@@ -205,6 +243,7 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+   ASSERT_OK(server->Preprocess());
+ #endif //BSGS
+   end = currentDateTime();
++  PrintStage0Timing("global", "main_preprocess_bsgs_call", start, end);
+   // Server global preprocessing #1 (only main hint, i.e. overall LWE instance, and RLWE part) time
+   dict[GLOBAL_PREPR_S] += (end-start)/1000;
+ 
+@@ -214,12 +253,14 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+   start = currentDateTime();
+   ASSERT_OK_AND_ASSIGN(auto client, Client::Create(kParameters, public_params));
+   end = currentDateTime();
+-  //std::cout << RED << "[==> TIMER  <==] Client creation time: " << (end-start) << " ms | " << (end-start)/1000 << " sec" << END << std::endl;
++  PrintStage0Timing("client_local", "client_create_main_pad_backend", start,
++                    end);
+ 
+   // This code moves back and forth between HintlessPIR code and VeriSimplePIR (VSPIR) code. So some type-casting is needed
+   // Get A, H for VSPIR
+ 
+-  start = currentDateTime();
++  const double bridge_main_start = currentDateTime();
++  start = bridge_main_start;
+   // Get D, A, H from Hintless
+   int num_shards = database->Data().size();
+   auto D_raw_vec = database->Data();
+@@ -233,16 +274,13 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+     lwe::Matrix D = ExportRawMatrix(D_raw_vec[i], kParameters.db_rows, bits_for_db_mask);
+     D_vec.push_back(D);
+   }
+-  const lwe::Matrix* A1_ref = database->LweQueryPad();
+-  auto A1 = ImportLweMatrix(*A1_ref);
+-  auto H_vec = database->Hints();
++  end = currentDateTime();
++  PrintStage0Timing("global", "bridge_export_database", start, end);
+ 
+-  // Convert D, A, H to VSPIR //
+-	// A
+-	VMatrix A_vsp(col_in, kParameters.lwe_secret_dim);
+-  convertToVeriSimplePIRMatrix(A_vsp, A1);
++  start = currentDateTime();
++  auto H_vec = database->Hints();
+ 
+-	// H (directly rather than recomputing the hint)
++  // Convert H to VSPIR (directly rather than recomputing the hint).
+   std::vector<VMatrix> H_vsp_vec;
+   H_vsp_vec.reserve(num_shards);
+   for (int i = 0; i < num_shards; i++) {
+@@ -253,39 +291,64 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+   // Main (overall LWE instance) hint size (MB)
+   dict[HINT_MB] += (H_vsp_vec.size() * H_vsp_vec[0].rows * H_vsp_vec[0].cols * sizeof(Elem))/(1ULL << 20);
+   end = currentDateTime();
++  PrintStage0Timing("global", "bridge_convert_main_hint", start, end);
+   // Server converting Hintless -> VeriSimplePIR time
+-  dict[GLOBAL_PREPR_S] += (end-start)/1000;
+-  
++  dict[GLOBAL_PREPR_S] += (end - bridge_main_start) / 1000;
++
+ 	// Conversions done
+ 
+ #ifndef SH_RUN // Only run proof preprocessing if SH_RUN is not set
+ 
+   const BinaryMatrix C = pir.PreprocSampleC();
+ 
+-  start = currentDateTime();
+-  const Matrix64 A_2 = pir.PreprocInitNew64();
+-	auto A_2_hintless = convertToHintlessPIRMatrixColumnForm64(A_2, row_in, offline_lattice_n_in);
++  const double offline_A2_start = currentDateTime();
++  start = offline_A2_start;
++  const bool use_structured_offline =
++      kParameters.offline_preprocessor_backend ==
++      OfflinePreprocessorBackend::kYpirNtt;
++  Matrix64 A_2;
++  Database::LweMatrix64 A_2_hintless;
++  std::unique_ptr<YpirOfflinePreprocessor> offline_preprocessor;
++  if (use_structured_offline) {
++    ASSERT_OK_AND_ASSIGN(
++        offline_preprocessor,
++        YpirOfflinePreprocessor::Create(
++            kParameters, public_params.prng_seed_lwe_query_pad()));
++  } else {
++    A_2 = pir.PreprocInitNew64();
++  }
+   end = currentDateTime();
+-  // Expanding A_2 (A for offline-only LWE instance) time
+-  dict[GLOBAL_PREPR_S] += (end-start)/1000;
+-  dict[CLIENT_PREPR_S] += (end-start)/1000;
+-  
+-  // To get time to expand main A for client's preprocessing time. Note that A_2 is for offline LWE instance which is used to compute Z = C*D only.
++  PrintStage0Timing("global", "offline_A2_generate", start, end);
+   start = currentDateTime();
+-  const VMatrix A_temp = pir.PreprocInitNew(lattice_n_in);
+-  auto A_temp_hintless = convertToHintlessPIRMatrixColumnForm(A_temp, col_in, lattice_n_in);
++  if (!use_structured_offline) {
++	  A_2_hintless = convertToHintlessPIRMatrixColumnForm64(
++        A_2, row_in, offline_lattice_n_in);
++  }
+   end = currentDateTime();
+-  // Expanding main A time
+-  dict[CLIENT_PREPR_S] += (end-start)/1000; // Already included in server time from above
++  PrintStage0Timing("global", "bridge_convert_offline_A2", start, end);
++  // Expanding A_2 (A for offline-only LWE instance) time
++  dict[GLOBAL_PREPR_S] += (end - offline_A2_start) / 1000;
++  dict[CLIENT_PREPR_S] += (end - offline_A2_start) / 1000;
+ 
+   //std::cout << "Computing H_2 = D^T * A_2" << std::endl;
+-  start = currentDateTime();
++  const double offline_H2_start = currentDateTime();
++  start = offline_H2_start;
+ #ifdef FAKE_RUN
+   auto H_2_hintless_vec = server->TransposeProductFake64();
+ #else //FAKE_RUN
+-	ASSERT_OK_AND_ASSIGN(auto H_2_hintless_vec, server->TransposeProduct64(A_2_hintless));
++  std::vector<Database::LweMatrix64> H_2_hintless_vec;
++  if (use_structured_offline) {
++    ASSERT_OK_AND_ASSIGN(H_2_hintless_vec,
++                         offline_preprocessor->ComputeHint(*database));
++  } else {
++	  ASSERT_OK_AND_ASSIGN(H_2_hintless_vec,
++                           server->TransposeProduct64(A_2_hintless));
++  }
+ #endif //FAKE_RUN
++  end = currentDateTime();
++  PrintStage0Timing("global", "offline_H2_matrix_product", start, end);
+ 
++  start = currentDateTime();
+   std::vector<Matrix64> H_2_vec;
+   H_2_vec.reserve(num_shards);
+   for (int i = 0; i < num_shards; i++) {
+@@ -294,28 +357,46 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+     H_2_vec.push_back(H_2);
+   }
+   end = currentDateTime();
++  PrintStage0Timing("global", "bridge_convert_offline_H2", start, end);
+   // Server global H_2 (hint for offline-only LWE instance) compute time
+-  dict[GLOBAL_PREPR_S] += (end-start)/1000;
++  dict[GLOBAL_PREPR_S] += (end - offline_H2_start) / 1000;
+   // Large offline-only LWE's hint H_2 size (MB)
+   dict[HINT_MB] += (H_2_vec.size() * H_2_vec[0].rows * H_2_vec[0].cols * sizeof(Elem64))/(1ULL << 20);
+ 
+   //std::cout << "Encrypting challenge C for preprocessing phase" << std::endl;
+   start = currentDateTime();
+-  const auto preproc_ct_sk_pair = pir.PreprocClientMessageNew64(A_2, C);
++  std::pair<std::vector<Matrix64>, std::vector<Matrix64>>
++      preproc_ct_sk_pair;
++  if (use_structured_offline) {
++    ASSERT_OK_AND_ASSIGN(
++        preproc_ct_sk_pair,
++        offline_preprocessor->EncryptChallenges(pir.lhe, C));
++  } else {
++    preproc_ct_sk_pair = pir.PreprocClientMessageNew64(A_2, C);
++  }
+ 
+   const auto preproc_cts = std::get<0>(preproc_ct_sk_pair);
+   const auto preproc_sks = std::get<1>(preproc_ct_sk_pair);
+   end = currentDateTime();
++  PrintStage0Timing("client_local", "offline_challenge_encrypt", start, end);
+   // Client encrypting C time
+   dict[CLIENT_PREPR_S] += (end-start)/1000;
+   // Client offline upload size (KB)
+   dict[OFFLINE_UP_KB] += (preproc_cts.size() * preproc_cts[0].rows * preproc_cts[0].cols * sizeof(Elem64))/(1ULL << 10);
+ 
+   //std::cout << "Computing v_i = D^T * u_i, for all i, in preprocessing" << std::endl;
+-  start = currentDateTime();
++  const double server_per_client_start = currentDateTime();
++  start = server_per_client_start;
+ 	auto preproc_cts_hintless = convertToHintlessPIRMatricesFromVectors64(preproc_cts, row_in);
++  end = currentDateTime();
++  PrintStage0Timing("server_per_client", "bridge_convert_challenge_ciphertexts",
++                    start, end);
++  start = currentDateTime();
+ 	ASSERT_OK_AND_ASSIGN(auto D_T_ct, server->TransposeProductCiphertexts64(preproc_cts_hintless));
+-	
++  end = currentDateTime();
++  PrintStage0Timing("server_per_client", "offline_DT_ciphertexts_product",
++                    start, end);
++  start = currentDateTime();
+   std::vector<std::vector<Matrix64>> preproc_res_cts_vec;
+   preproc_res_cts_vec.reserve(num_shards);
+   for (int i = 0; i < num_shards; i++) {
+@@ -323,8 +404,11 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+     preproc_res_cts_vec.push_back(preproc_res_cts);
+   }
+   end = currentDateTime();
++  PrintStage0Timing("server_per_client", "bridge_convert_offline_response",
++                    start, end);
+   // Server (client-specific) D^T*C^T time
+-  dict[SV_CLIENT_SPEC_PREPR_S] += (end-start)/1000;
++  dict[SV_CLIENT_SPEC_PREPR_S] +=
++      (end - server_per_client_start) / 1000;
+   // Server offline response size (KB)
+   dict[OFFLINE_DOWN_KB] += (preproc_res_cts_vec.size() * preproc_res_cts_vec[0].size() * preproc_res_cts_vec[0][0].rows * preproc_res_cts_vec[0][0].cols * sizeof(Elem64))/(1ULL << 10);
+ 
+@@ -337,6 +421,7 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+     Z_vec.push_back(Z);
+   }
+   end = currentDateTime();
++  PrintStage0Timing("client_local", "offline_recover_Z", start, end);
+   // Client decrypting Z time
+   dict[CLIENT_PREPR_S] += (end-start)/1000;
+ 
+@@ -358,21 +443,27 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+     RZ_vec.push_back(RZ);
+   }
+   end = currentDateTime();
++  PrintStage0Timing("client_local", "offline_compress_RC_RZ", start, end);
+   // Client compression of Z time
+   dict[CLIENT_PREPR_S] += (end-start)/1000;
+ 
+   // Client compressed ZA=CH check
+   start = currentDateTime();
+   for (int i = 0; i < num_shards; i++) {
+-    //std::cout << "(Compressed) verifying shard " << i << " with primary A, H" << std::endl;
+-    pir.VerifyPreprocZCompressed(RZ_vec[i], A_vsp, RC, H_vsp_vec[i]);
++    ASSERT_OK_AND_ASSIGN(
++        VMatrix RZA,
++        client->MultiplyRightByMainPad(RZ_vec[i]));
++    pir.VerifyPreprocZCompressedGivenLeftProduct(RZA, RC, H_vsp_vec[i]);
+   }
+   end = currentDateTime();
++  PrintStage0Timing("client_local", "offline_verify_ZA_equals_CH", start,
++                    end);
+   // Client offline verification time
+   dict[CLIENT_PREPR_S] += (end-start)/1000;
+   std::cout << "Success: (Compressed) Z in preprocessing verified and preprocessing phase done.\n";
+-  
++
+   end_prep = currentDateTime();
++  PrintStage0Timing("preprocessing", "total", start_prep, end_prep);
+   std::cout << "[==> TIMER  <==] Total preprocessing (server + client compute) time: " << (end_prep-start_prep) << " ms | " << (end_prep-start_prep)/1000 << " sec" << std::endl;
+ 
+ #endif //SH_RUN
+@@ -392,6 +483,7 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+   start = currentDateTime();
+   ASSERT_OK_AND_ASSIGN(auto As_s_tuple, client->Compute_A_times_s());
+   end = currentDateTime();
++  PrintStage0Timing("prepare_client", "main_pad_times_secret", start, end);
+   // Client expansion of A and A*s computation time
+   dict[CLIENT_PREP_PRE_S] += (end-start)/1000;
+ 
+@@ -402,7 +494,7 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+   // Size of of A*s
+   dict[ONLINE_STATE_KB] += (As_vsp.rows * As_vsp.cols * sizeof(Elem))/(1ULL << 10);
+   // Size of of s_lwe
+-  dict[ONLINE_STATE_KB] += (s_lwe.Key().size() * sizeof(Elem))/(1ULL << 10); 
++  dict[ONLINE_STATE_KB] += (s_lwe.Key().size() * sizeof(Elem))/(1ULL << 10);
+ 
+   // Prepare RLWE parts
+   // Client's RLWE request
+@@ -413,6 +505,7 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+   ASSERT_OK_AND_ASSIGN(auto prepare_req, client->PrepareLinPirGivenS(s_lwe));
+ #endif //BSGS
+   end = currentDateTime();
++  PrintStage0Timing("prepare_client", "linpir_prepare_request", start, end);
+   // Client prepare req gen time
+   dict[CLIENT_PREP_PRE_S] += (end-start)/1000;
+   // Client prepare request KB
+@@ -423,11 +516,12 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+   // Server's RLWE response
+   start = currentDateTime();
+ #ifdef BSGS
+-  ASSERT_OK_AND_ASSIGN(auto prepare_response, server->HandlePrepareRequestBSGS(prepare_req)); 
++  ASSERT_OK_AND_ASSIGN(auto prepare_response, server->HandlePrepareRequestBSGS(prepare_req));
+ #else //BSGS
+   ASSERT_OK_AND_ASSIGN(auto prepare_response, server->HandlePrepareRequest(prepare_req));
+ #endif //BSGS
+   end = currentDateTime();
++  PrintStage0Timing("prepare_server", "linpir_Hs_response", start, end);
+   // Server prepare response time (LinPir H*s compute time)
+   dict[SERVER_PREP_S] += (end-start)/1000;
+   // Server prepare response KB
+@@ -439,13 +533,14 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+   start = currentDateTime();
+   ASSERT_OK_AND_ASSIGN(auto hs_vec, client->RecoverHsPreparePhase(prepare_response));
+   end = currentDateTime();
++  PrintStage0Timing("prepare_client", "linpir_Hs_recover", start, end);
+   // Client prepare recover time (LinPir response decryption)
+   dict[CLIENT_PREP_POST_S] += (end-start)/1000;
+ 
+ #ifndef SH_RUN // Only run verification if SH_RUN is not set
+   // Size of Z' = RZ
+   dict[ONLINE_STATE_KB] += (RZ_vec.size() * RZ_vec[0].rows * RZ_vec[0].cols * sizeof(Elem))/(1ULL << 10);
+-  // Size of C' = RC 
++  // Size of C' = RC
+   dict[ONLINE_STATE_KB] += (RC.rows * RC.cols * sizeof(Elem))/(1ULL << 10);
+ 
+   //std::cout << "Doing verification: H*s as part of prepare phase" << std::endl;
+@@ -458,24 +553,27 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+     pir.HsVerifyCompressed(As_vsp, h_times_s, RZ_vec[i], RC);
+   }
+   end2 = currentDateTime();
++  PrintStage0Timing("prepare_client", "verify_Hs", start2, end2);
+   // Client prepare verification of H*s time
+   dict[CLIENT_PREP_POST_S] += (end2-start2)/1000;
+ #endif //SH_RUN
+ 
+   end_prepare = currentDateTime();
++  PrintStage0Timing("prepare", "total", start_prepare, end_prepare);
+   std::cout << BLUE << "[==> TIMER  <==] Prepare phase (query-level preprocessing) total (client + server) time: " << (end_prepare-start_prepare) << " ms | " << (end_prepare-start_prepare)/1000 << " sec" << END << std::endl;
+ 
+   double start_online, end_online;
+   start_online = currentDateTime();
+   lwe::Vector query_vsp = lwe::Vector::Zero(col_in);
+-  
++
+   // Client online request gen
+   start = currentDateTime();
+   ASSERT_OK_AND_ASSIGN(auto request_and_query, client->GenerateRequestGivenAsSkipLinPir(index, As, s_lwe));
+   end = currentDateTime();
++  PrintStage0Timing("online_client", "query_generate", start, end);
+   // Client online request generation time
+   dict[CLIENT_Q_REQ_GEN_MS] += (end-start);
+-	
++
+   auto request = request_and_query.first;
+ 	auto query = request_and_query.second;
+   // Client online request (LWE only) KB
+@@ -489,9 +587,10 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+   start2 = currentDateTime();
+   ASSERT_OK_AND_ASSIGN(auto response, server->HandleRequestSkipLinPir(request));
+   end2 = currentDateTime();
++  PrintStage0Timing("online_server", "database_Du", start2, end2);
+   // Server-only online time (only D*u)
+   dict[SERVER_Q_RESP_S] += (end2-start2)/1000;
+-  // Server online response KB 
++  // Server online response KB
+   dict[QUERY_DOWN_KB] += (response.ByteSizeLong() / 1024);
+   // Client response from server (D*u) size
+   dict[ONLINE_STATE_KB] += (response.ByteSizeLong() / 1024);
+@@ -500,6 +599,7 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+   start = currentDateTime();
+   ASSERT_OK_AND_ASSIGN(auto rec_v, client->RecoverRecordAndGiveV(response, hs_vec));
+   end = currentDateTime();
++  PrintStage0Timing("online_client", "record_recover", start, end);
+   // Client record recovery time (given precomputed Hs)
+   dict[CLIENT_Q_DEC_MS] += (end-start);
+ 
+@@ -515,6 +615,7 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+   }
+   //std::cout << "Online verification done for all shards" << std::endl;
+   end = currentDateTime();
++  PrintStage0Timing("online_client", "verify_Du", start, end);
+   // Client online verification time (only D*u)
+   dict[CLIENT_Q_VER_MS] += (end-start);
+ #endif //SH_RUN
+@@ -523,8 +624,10 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+   std::cout << BLUE << "[==> TIMER  <==] Query-level preprocessing + online time: " << (end_on-start_on) << " ms | " << (end_on-start_on)/1000 << " sec" << END << std::endl;
+ 
+   end_online = currentDateTime();
++  PrintStage0Timing("online", "total_without_prepare", start_online,
++                    end_online);
+   std::cout << BLUE << "[==> TIMER  <==] Online-only (w/o prepare) phase total (client + server) time: " << (end_online-start_online) << " ms | " << (end_online-start_online)/1000 << " sec" << END << std::endl;
+-  
++
+   if (kParameters.db_stack_cells > 1) { // Stacking
+     ASSERT_OK_AND_ASSIGN(auto expected, database->RecordWithStacking(index));
+     EXPECT_EQ(record, expected);
+@@ -534,11 +637,11 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+     EXPECT_EQ(record, expected);
+   }
+   std::cout << "End-to-end test done." << std::endl;
+-  
++
+   std::cout << "----------------------------------" << std::endl;
+   std::cout << "Recorded metrics" << std::endl;
+   std::cout << "Database size: " << N*d_in / (8.0*(1ULL<<30)) << " GiB\n";
+-  std::cout << "Shards: " << kParameters.db_record_bit_size / 
++  std::cout << "Shards: " << kParameters.db_record_bit_size /
+                                  kParameters.lwe_plaintext_bit_size << " and Stacks: " << kParameters.db_stack_cells << std::endl;
+   for (auto it : dict) {
+     std::cout << it.first << " : " << it.second << std::endl;
+@@ -550,3 +653,138 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+ }  // namespace hintless_simplepir
+ 
+ }  // namespace hintless_pir
++
++int main(int argc, char** argv) {
++  std::vector<char*> gtest_args;
++  gtest_args.reserve(argc);
++  gtest_args.push_back(argv[0]);
++  std::string profile = "baseline";
++  int offline_ring_degree = 4096;
++  bool offline_ring_degree_explicit = false;
++  constexpr char kProfilePrefix[] = "--preproc-profile=";
++  constexpr char kOfflineRingPrefix[] = "--offline-ring-degree=";
++  for (int i = 1; i < argc; ++i) {
++    if (std::strncmp(argv[i], kProfilePrefix,
++                     sizeof(kProfilePrefix) - 1) == 0) {
++      profile = argv[i] + sizeof(kProfilePrefix) - 1;
++    } else if (std::strncmp(argv[i], kOfflineRingPrefix,
++                            sizeof(kOfflineRingPrefix) - 1) == 0) {
++      const std::string value =
++          argv[i] + sizeof(kOfflineRingPrefix) - 1;
++      if (value == "2048") {
++        offline_ring_degree = 2048;
++      } else if (value == "4096") {
++        offline_ring_degree = 4096;
++      } else {
++        std::cerr << "--offline-ring-degree must be 2048 or 4096; got "
++                  << value << std::endl;
++        return 2;
++      }
++      offline_ring_degree_explicit = true;
++    } else {
++      gtest_args.push_back(argv[i]);
++    }
++  }
++
++  using hintless_pir::hintless_simplepir::MainPreprocessorBackend;
++  using hintless_pir::hintless_simplepir::OfflinePreprocessorBackend;
++  using hintless_pir::hintless_simplepir::kParameters;
++  using hintless_pir::hintless_simplepir::kYpirOfflineStructuredPadVersion;
++  using hintless_pir::hintless_simplepir::kYpirStructuredPadVersion;
++  using hintless_pir::hintless_simplepir::preproc_profile;
++  bool main_ypir = false;
++  bool offline_ypir = false;
++
++  auto configure_main_ypir = [&]() -> bool {
++    constexpr int kYpirRingLogN = 11;
++    constexpr int kYpirRingDegree = 1 << kYpirRingLogN;
++    if (kParameters.db_cols % kYpirRingDegree != 0) {
++      std::cerr << "YPIR main requires db_cols divisible by 2048; got "
++                << kParameters.db_cols << std::endl;
++      return false;
++    }
++    kParameters.lwe_secret_dim = kYpirRingDegree;
++    kParameters.main_preprocessor_backend =
++        MainPreprocessorBackend::kYpirNtt;
++    kParameters.main_ring_log_n = kYpirRingLogN;
++    kParameters.main_pad_block_count =
++        kParameters.db_cols / kYpirRingDegree;
++    kParameters.structured_pad_version = kYpirStructuredPadVersion;
++    main_ypir = true;
++    return true;
++  };
++
++  auto configure_offline_ypir = [&]() -> bool {
++    if (kParameters.db_rows % offline_ring_degree != 0) {
++      std::cerr << "YPIR offline requires db_rows divisible by "
++                << offline_ring_degree << "; got " << kParameters.db_rows
++                << std::endl;
++      return false;
++    }
++    kParameters.offline_lwe_secret_dim = offline_ring_degree;
++    kParameters.offline_preprocessor_backend =
++        OfflinePreprocessorBackend::kYpirNtt;
++    kParameters.offline_ring_log_n =
++        offline_ring_degree == 2048 ? 11 : 12;
++    kParameters.offline_pad_block_count =
++        kParameters.db_rows / offline_ring_degree;
++    kParameters.offline_structured_pad_version =
++        kYpirOfflineStructuredPadVersion;
++    offline_ypir = true;
++    return true;
++  };
++
++  if (profile == "baseline") {
++    kParameters.main_preprocessor_backend =
++        MainPreprocessorBackend::kDenseLwe;
++  } else if (profile == "ypir-main") {
++    if (!configure_main_ypir()) return 2;
++  } else if (profile == "distpir-offline") {
++    if (!configure_offline_ypir()) return 2;
++  } else if (profile == "hybrid") {
++    if (!configure_main_ypir() || !configure_offline_ypir()) return 2;
++  } else {
++    std::cerr << "unknown --preproc-profile value: " << profile << std::endl;
++    return 2;
++  }
++  if (!offline_ypir && offline_ring_degree_explicit) {
++    std::cerr << "--offline-ring-degree is only valid for distpir-offline "
++                 "and hybrid profiles"
++              << std::endl;
++    return 2;
++  }
++  preproc_profile = profile;
++  std::cout << "preproc_profile=" << preproc_profile << std::endl;
++  std::cout << "main_preproc_backend="
++            << (main_ypir ? "ypir-exact-ntt" : "dense-lwe")
++            << std::endl;
++  std::cout << "main_ring_degree="
++            << (main_ypir ? 2048 : 0) << std::endl;
++  std::cout << "main_modulus=" << SOL_NTT_PRIME << std::endl;
++  if (main_ypir) {
++    std::cout << "main_security_status="
++                 "experimental-ring-lwe-ring-sis-parameters-not-audited"
++              << std::endl;
++  }
++  std::cout << "offline_preproc_backend="
++            << (offline_ypir ? "ypir-offline-exact-ntt" : "dense-offline")
++            << std::endl;
++  std::cout << "offline_ring_degree="
++            << (offline_ypir ? offline_ring_degree : 0) << std::endl;
++  std::cout << "offline_pad_block_count="
++            << (offline_ypir ? kParameters.offline_pad_block_count : 0)
++            << std::endl;
++  std::cout << "offline_modulus=" << VSPIR_LHE_PRIME << std::endl;
++  if (offline_ypir) {
++    std::cout << "offline_prg_domain="
++              << hintless_pir::hintless_simplepir::kYpirOfflinePadDomain
++              << std::endl;
++    std::cout << "offline_security_status="
++                 "experimental-ring-lwe-parameters-not-audited"
++              << std::endl;
++  }
++
++  int gtest_argc = static_cast<int>(gtest_args.size());
++  ::testing::InitGoogleTest(&gtest_argc, gtest_args.data());
++  return RUN_ALL_TESTS();
++}
+diff --git a/hintless_simplepir/offline_preprocessor.cc b/hintless_simplepir/offline_preprocessor.cc
+new file mode 100644
+index 0000000..a5466fa
+--- /dev/null
++++ b/hintless_simplepir/offline_preprocessor.cc
+@@ -0,0 +1,310 @@
++// Copyright 2026
++// Licensed under the Apache License, Version 2.0.
++
++#include "hintless_simplepir/offline_preprocessor.h"
++
++#include <array>
++#include <cstddef>
++#include <cstdint>
++#include <memory>
++#include <string>
++#include <utility>
++#include <vector>
++
++#include <openssl/sha.h>
++
++#include "absl/memory/memory.h"
++#include "absl/status/status.h"
++#include "absl/status/statusor.h"
++#include "absl/strings/str_cat.h"
++#include "hintless_simplepir/database_hwy.h"
++#include "hintless_simplepir/parameters.h"
++#include "lwe/negacyclic_ntt.h"
++#include "shell_encryption/prng/prng.h"
++#include "shell_encryption/prng/single_thread_chacha_prng.h"
++#include "shell_encryption/prng/single_thread_hkdf_prng.h"
++#include "shell_encryption/status_macros.h"
++#include "verisimplepir/src/lib/pir/lhe.h"
++
++namespace hintless_pir {
++namespace hintless_simplepir {
++namespace {
++
++constexpr uint64_t kOfflineModulus = VSPIR_LHE_PRIME;
++
++uint64_t NegateMod(uint64_t value) {
++  return value == 0 ? 0 : kOfflineModulus - value;
++}
++
++absl::StatusOr<std::unique_ptr<rlwe::SecurePrng>> CreatePadPrng(
++    const Parameters& params, absl::string_view seed) {
++  if (params.prng_type == rlwe::PRNG_TYPE_HKDF) {
++    RLWE_ASSIGN_OR_RETURN(auto prng, rlwe::SingleThreadHkdfPrng::Create(seed));
++    return std::unique_ptr<rlwe::SecurePrng>(std::move(prng));
++  }
++  if (params.prng_type == rlwe::PRNG_TYPE_CHACHA) {
++    RLWE_ASSIGN_OR_RETURN(auto prng,
++                          rlwe::SingleThreadChaChaPrng::Create(seed));
++    return std::unique_ptr<rlwe::SecurePrng>(std::move(prng));
++  }
++  return absl::InvalidArgumentError("unsupported PRNG for offline public pad");
++}
++
++absl::StatusOr<std::string> DeriveOfflinePadSeed(
++    const Parameters& params, absl::string_view public_seed) {
++  size_t output_length;
++  if (params.prng_type == rlwe::PRNG_TYPE_HKDF) {
++    output_length = rlwe::SingleThreadHkdfPrng::SeedLength();
++  } else if (params.prng_type == rlwe::PRNG_TYPE_CHACHA) {
++    output_length = rlwe::SingleThreadChaChaPrng::SeedLength();
++  } else {
++    return absl::InvalidArgumentError("unsupported PRNG for offline pad seed");
++  }
++  if (output_length > SHA512_DIGEST_LENGTH) {
++    return absl::InternalError("offline pad seed length exceeds SHA-512 output");
++  }
++  std::string input;
++  input.reserve(sizeof(kYpirOfflinePadDomain) + public_seed.size());
++  input.append(kYpirOfflinePadDomain);
++  input.push_back('\0');
++  input.append(public_seed.data(), public_seed.size());
++  std::array<unsigned char, SHA512_DIGEST_LENGTH> digest{};
++  SHA512(reinterpret_cast<const unsigned char*>(input.data()), input.size(),
++         digest.data());
++  return std::string(reinterpret_cast<const char*>(digest.data()),
++                     output_length);
++}
++
++absl::StatusOr<uint64_t> SampleUniformCoefficient(rlwe::SecurePrng* prng) {
++  static_assert(VSPIR_LHE_PRIME_BITS > 0 && VSPIR_LHE_PRIME_BITS < 64,
++                "offline modulus bit size must be in [1, 63]");
++  constexpr uint64_t kMask =
++      (uint64_t{1} << VSPIR_LHE_PRIME_BITS) - uint64_t{1};
++  uint64_t candidate;
++  do {
++    RLWE_ASSIGN_OR_RETURN(candidate, prng->Rand64());
++    candidate &= kMask;
++  } while (candidate >= kOfflineModulus);
++  return candidate;
++}
++
++}  // namespace
++
++absl::StatusOr<std::unique_ptr<YpirOfflinePreprocessor>>
++YpirOfflinePreprocessor::Create(const Parameters& params,
++                                absl::string_view public_seed) {
++  if (params.offline_preprocessor_backend !=
++      OfflinePreprocessorBackend::kYpirNtt) {
++    return absl::InvalidArgumentError(
++        "YPIR offline preprocessor requires the YPIR NTT backend");
++  }
++  if (params.offline_ring_log_n <= 0 || params.offline_ring_log_n >= 31) {
++    return absl::InvalidArgumentError(
++        "YPIR offline ring log degree must be in [1, 30]");
++  }
++  const int degree = 1 << params.offline_ring_log_n;
++  if (params.offline_lwe_secret_dim != degree) {
++    return absl::InvalidArgumentError(absl::StrCat(
++        "YPIR offline requires offline_lwe_secret_dim == ring degree; got ",
++        params.offline_lwe_secret_dim, " and ", degree));
++  }
++  if (params.db_rows % degree != 0) {
++    return absl::InvalidArgumentError(
++        "YPIR offline requires db_rows to be divisible by ring degree");
++  }
++  const int block_count = params.db_rows / degree;
++  if (params.offline_pad_block_count != block_count) {
++    return absl::InvalidArgumentError(absl::StrCat(
++        "YPIR offline pad block count mismatch: got ",
++        params.offline_pad_block_count, ", derived ", block_count));
++  }
++  if (params.offline_structured_pad_version !=
++      kYpirOfflineStructuredPadVersion) {
++    return absl::InvalidArgumentError(
++        "unsupported YPIR offline structured pad version");
++  }
++  if (params.lwe_plaintext_bit_size <= 0 ||
++      params.lwe_plaintext_bit_size > 8) {
++    return absl::InvalidArgumentError(
++        "YPIR offline requires database coefficients of at most 8 bits");
++  }
++
++  RLWE_ASSIGN_OR_RETURN(
++      auto ntt,
++      lwe::NegacyclicNtt::Create(kOfflineModulus,
++                                 params.offline_ring_log_n));
++  RLWE_ASSIGN_OR_RETURN(const std::string domain_seed,
++                        DeriveOfflinePadSeed(params, public_seed));
++  RLWE_ASSIGN_OR_RETURN(auto prng, CreatePadPrng(params, domain_seed));
++
++  std::vector<std::vector<uint64_t>> blocks(
++      block_count, std::vector<uint64_t>(degree));
++  std::vector<lwe::NegacyclicNtt::Polynomial> blocks_ntt;
++  std::vector<lwe::NegacyclicNtt::Polynomial> transpose_blocks_ntt;
++  blocks_ntt.reserve(block_count);
++  transpose_blocks_ntt.reserve(block_count);
++  for (int block = 0; block < block_count; ++block) {
++    for (int i = 0; i < degree; ++i) {
++      RLWE_ASSIGN_OR_RETURN(blocks[block][i],
++                            SampleUniformCoefficient(prng.get()));
++    }
++    RLWE_ASSIGN_OR_RETURN(auto block_ntt, ntt->Forward64(blocks[block]));
++    blocks_ntt.push_back(std::move(block_ntt));
++
++    // If NC(a)[i,j] = a[j-i] with negacyclic wrap, then NC(a)*s is
++    // the negacyclic convolution of (a0,-aN-1,...,-a1) with s.
++    std::vector<uint64_t> transposed(degree);
++    transposed[0] = blocks[block][0];
++    for (int i = 1; i < degree; ++i) {
++      transposed[i] = NegateMod(blocks[block][degree - i]);
++    }
++    RLWE_ASSIGN_OR_RETURN(auto transpose_ntt,
++                          ntt->Forward64(transposed));
++    transpose_blocks_ntt.push_back(std::move(transpose_ntt));
++  }
++
++  return absl::WrapUnique(new YpirOfflinePreprocessor(
++      params, std::move(ntt), std::move(blocks), std::move(blocks_ntt),
++      std::move(transpose_blocks_ntt)));
++}
++
++absl::StatusOr<std::vector<Database::LweMatrix64>>
++YpirOfflinePreprocessor::ComputeHint(const Database& database) const {
++  absl::Span<const Database::RawMatrix> shards = database.Data();
++  if (shards.size() != database.NumShards()) {
++    return absl::InternalError("database shard count mismatch");
++  }
++  std::vector<Database::LweMatrix64> output(shards.size());
++  const int degree = ntt_->degree();
++  const int values_per_word =
++      sizeof(Database::BlockType) / sizeof(lwe::DBInteger);
++  const int bits_per_value = 8 * sizeof(lwe::DBInteger);
++  const uint64_t db_mask =
++      (uint64_t{1} << params_.lwe_plaintext_bit_size) - uint64_t{1};
++
++  for (size_t shard = 0; shard < shards.size(); ++shard) {
++    if (shards[shard].size() != params_.db_cols) {
++      return absl::InvalidArgumentError(
++          "database column-form width does not match database parameters");
++    }
++    Database::LweMatrix64& hint = output[shard];
++    hint.resize(params_.db_cols);
++    std::vector<uint64_t> coefficients(degree);
++    for (int64_t col = 0; col < params_.db_cols; ++col) {
++      if (shards[shard][col].size() * values_per_word < params_.db_rows) {
++        return absl::InvalidArgumentError(
++            "packed database column is too short");
++      }
++      auto accumulator = ntt_->ZeroNtt();
++      for (int block = 0; block < params_.offline_pad_block_count; ++block) {
++        const int64_t base_row = static_cast<int64_t>(block) * degree;
++        for (int i = 0; i < degree; ++i) {
++          const int64_t row = base_row + i;
++          const int64_t word = row / values_per_word;
++          const int shift = (row % values_per_word) * bits_per_value;
++          coefficients[i] = static_cast<uint64_t>(
++              (shards[shard][col][word] >> shift) & db_mask);
++        }
++        RLWE_ASSIGN_OR_RETURN(auto data_ntt,
++                              ntt_->Forward64(coefficients));
++        RLWE_RETURN_IF_ERROR(ntt_->FusedMultiplyAddInPlace(
++            accumulator, data_ntt, blocks_ntt_[block]));
++      }
++      RLWE_ASSIGN_OR_RETURN(hint[col], ntt_->Inverse64(accumulator));
++    }
++  }
++  return output;
++}
++
++absl::StatusOr<Matrix64> YpirOfflinePreprocessor::ComputePadTimesSecret(
++    const Matrix64& secret) const {
++  const int degree = ntt_->degree();
++  if (secret.rows != static_cast<uint64_t>(degree) || secret.cols != 1) {
++    return absl::InvalidArgumentError(
++        "secret dimensions do not match YPIR offline ring degree");
++  }
++  std::vector<uint64_t> secret_coefficients(degree);
++  for (int i = 0; i < degree; ++i) {
++    if (secret.data[i] >= kOfflineModulus) {
++      return absl::InvalidArgumentError(
++          "secret coefficient is not in canonical Z_q representation");
++    }
++    secret_coefficients[i] = secret.data[i];
++  }
++  RLWE_ASSIGN_OR_RETURN(auto secret_ntt,
++                        ntt_->Forward64(secret_coefficients));
++  Matrix64 output(params_.db_rows, 1);
++  for (int block = 0; block < params_.offline_pad_block_count; ++block) {
++    auto product = transpose_blocks_ntt_[block];
++    RLWE_RETURN_IF_ERROR(ntt_->MultiplyInPlace(product, secret_ntt));
++    RLWE_ASSIGN_OR_RETURN(auto coefficients, ntt_->Inverse64(product));
++    for (int i = 0; i < degree; ++i) {
++      output.data[static_cast<uint64_t>(block) * degree + i] = coefficients[i];
++    }
++  }
++  return output;
++}
++
++absl::StatusOr<std::pair<std::vector<Matrix64>, std::vector<Matrix64>>>
++YpirOfflinePreprocessor::EncryptChallenges(
++    const LHE& lhe, const BinaryMatrix& plaintexts) const {
++  if (plaintexts.cols != static_cast<uint64_t>(params_.db_rows)) {
++    return absl::InvalidArgumentError(
++        "offline challenge width does not match A_2 row count");
++  }
++  std::vector<Matrix64> secret_keys;
++  secret_keys.reserve(plaintexts.rows);
++  for (uint64_t row = 0; row < plaintexts.rows; ++row) {
++    secret_keys.push_back(
++        lhe.sampleSecretKeyTernary64(params_.offline_lwe_secret_dim));
++  }
++
++  std::vector<Matrix64> ciphertexts;
++  ciphertexts.reserve(plaintexts.rows);
++  for (uint64_t row = 0; row < plaintexts.rows; ++row) {
++    Matrix64 plaintext(plaintexts.cols, 1);
++    for (uint64_t i = 0; i < plaintexts.cols; ++i) {
++      plaintext.data[i] = plaintexts.data[row * plaintexts.cols + i];
++    }
++    RLWE_ASSIGN_OR_RETURN(Matrix64 pad_times_secret,
++                          ComputePadTimesSecret(secret_keys[row]));
++    ciphertexts.push_back(
++        lhe.encrypt64FromPadProduct(pad_times_secret, plaintext, true));
++  }
++  return std::make_pair(std::move(ciphertexts), std::move(secret_keys));
++}
++
++OfflinePreprocessorMetadata YpirOfflinePreprocessor::Metadata() const {
++  return OfflinePreprocessorMetadata{
++      .backend = OfflinePreprocessorBackend::kYpirNtt,
++      .backend_name = "ypir-offline-exact-ntt",
++      .ring_degree = ntt_->degree(),
++      .pad_block_count = params_.offline_pad_block_count,
++      .structured_pad_version = params_.offline_structured_pad_version,
++      .modulus = kOfflineModulus,
++      .secret_dimension = params_.offline_lwe_secret_dim,
++      .prg_domain = kYpirOfflinePadDomain,
++      .security_status = "experimental-ring-lwe-parameters-not-audited",
++  };
++}
++
++absl::StatusOr<Matrix64>
++YpirOfflinePreprocessor::MaterializePadForTesting() const {
++  const int degree = ntt_->degree();
++  Matrix64 output(params_.db_rows, degree);
++  for (int block = 0; block < params_.offline_pad_block_count; ++block) {
++    for (int row = 0; row < degree; ++row) {
++      for (int col = 0; col < degree; ++col) {
++        const int delta = col - row;
++        output.data[(static_cast<uint64_t>(block) * degree + row) * degree +
++                    col] = delta >= 0
++                               ? blocks_[block][delta]
++                               : NegateMod(blocks_[block][degree + delta]);
++      }
++    }
++  }
++  return output;
++}
++
++}  // namespace hintless_simplepir
++}  // namespace hintless_pir
+diff --git a/hintless_simplepir/offline_preprocessor.h b/hintless_simplepir/offline_preprocessor.h
+new file mode 100644
+index 0000000..695936d
+--- /dev/null
++++ b/hintless_simplepir/offline_preprocessor.h
+@@ -0,0 +1,87 @@
++// Copyright 2026
++// Licensed under the Apache License, Version 2.0.
++
++#ifndef HINTLESS_PIR_HINTLESS_SIMPLEPIR_OFFLINE_PREPROCESSOR_H_
++#define HINTLESS_PIR_HINTLESS_SIMPLEPIR_OFFLINE_PREPROCESSOR_H_
++
++#include <cstdint>
++#include <memory>
++#include <string>
++#include <utility>
++#include <vector>
++
++#include "absl/status/statusor.h"
++#include "absl/strings/string_view.h"
++#include "hintless_simplepir/database_hwy.h"
++#include "hintless_simplepir/parameters.h"
++#include "lwe/negacyclic_ntt.h"
++#include "verisimplepir/src/lib/pir/lhe.h"
++
++namespace hintless_pir {
++namespace hintless_simplepir {
++
++inline constexpr char kYpirOfflinePadDomain[] =
++    "small-client-pir/offline-pad/ypir-ntt/v1";
++inline constexpr int kYpirOfflineStructuredPadVersion = 1;
++
++struct OfflinePreprocessorMetadata {
++  OfflinePreprocessorBackend backend;
++  std::string backend_name;
++  int ring_degree;
++  int pad_block_count;
++  int structured_pad_version;
++  uint64_t modulus;
++  int secret_dimension;
++  std::string prg_domain;
++  std::string security_status;
++};
++
++// Exact structured public pad for the offline verification LWE instance.
++// Production methods never materialize the db_rows x ring_degree matrix A_2.
++class YpirOfflinePreprocessor {
++ public:
++  static absl::StatusOr<std::unique_ptr<YpirOfflinePreprocessor>> Create(
++      const Parameters& params, absl::string_view public_seed);
++
++  // Computes H_2 = D^T A_2.  The result layout is
++  // shard, database column, secret coefficient.
++  absl::StatusOr<std::vector<Database::LweMatrix64>> ComputeHint(
++      const Database& database) const;
++
++  // Computes A_2 s as a db_rows x 1 column vector.
++  absl::StatusOr<Matrix64> ComputePadTimesSecret(
++      const Matrix64& secret) const;
++
++  // Encrypts every row of C using the same structured A_2 used by ComputeHint.
++  absl::StatusOr<
++      std::pair<std::vector<Matrix64>, std::vector<Matrix64>>>
++  EncryptChallenges(const LHE& lhe, const BinaryMatrix& plaintexts) const;
++
++  OfflinePreprocessorMetadata Metadata() const;
++
++  // Test/debug-only dense expansion.  Production paths must not call this.
++  absl::StatusOr<Matrix64> MaterializePadForTesting() const;
++
++ private:
++  YpirOfflinePreprocessor(
++      Parameters params, std::unique_ptr<lwe::NegacyclicNtt> ntt,
++      std::vector<std::vector<uint64_t>> blocks,
++      std::vector<lwe::NegacyclicNtt::Polynomial> blocks_ntt,
++      std::vector<lwe::NegacyclicNtt::Polynomial> transpose_blocks_ntt)
++      : params_(std::move(params)),
++        ntt_(std::move(ntt)),
++        blocks_(std::move(blocks)),
++        blocks_ntt_(std::move(blocks_ntt)),
++        transpose_blocks_ntt_(std::move(transpose_blocks_ntt)) {}
++
++  const Parameters params_;
++  const std::unique_ptr<lwe::NegacyclicNtt> ntt_;
++  const std::vector<std::vector<uint64_t>> blocks_;
++  const std::vector<lwe::NegacyclicNtt::Polynomial> blocks_ntt_;
++  const std::vector<lwe::NegacyclicNtt::Polynomial> transpose_blocks_ntt_;
++};
++
++}  // namespace hintless_simplepir
++}  // namespace hintless_pir
++
++#endif  // HINTLESS_PIR_HINTLESS_SIMPLEPIR_OFFLINE_PREPROCESSOR_H_
+diff --git a/hintless_simplepir/offline_preprocessor_test.cc b/hintless_simplepir/offline_preprocessor_test.cc
+new file mode 100644
+index 0000000..2b4dd12
+--- /dev/null
++++ b/hintless_simplepir/offline_preprocessor_test.cc
+@@ -0,0 +1,214 @@
++// Copyright 2026
++// Licensed under the Apache License, Version 2.0.
++
++#include "hintless_simplepir/offline_preprocessor.h"
++
++#include <cstdint>
++#include <string>
++#include <vector>
++
++#include "gmock/gmock.h"
++#include "gtest/gtest.h"
++#include "hintless_simplepir/database_hwy.h"
++#include "hintless_simplepir/parameters.h"
++#include "lwe/matrix_conversion.h"
++#include "lwe/negacyclic_ntt.h"
++#include "shell_encryption/prng/single_thread_hkdf_prng.h"
++#include "shell_encryption/testing/status_matchers.h"
++#include "shell_encryption/testing/status_testing.h"
++#include "verisimplepir/src/lib/pir/lhe.h"
++#include "verisimplepir/src/lib/pir/mat.h"
++
++namespace hintless_pir {
++namespace hintless_simplepir {
++namespace {
++
++using ::rlwe::testing::StatusIs;
++
++constexpr uint64_t kModulus = VSPIR_LHE_PRIME;
++
++uint64_t AddMod(uint64_t lhs, uint64_t rhs) {
++  const uint64_t sum = lhs + rhs;
++  return sum >= kModulus ? sum - kModulus : sum;
++}
++
++uint64_t MulMod(uint64_t lhs, uint64_t rhs) {
++  return static_cast<uint64_t>(
++      (static_cast<unsigned __int128>(lhs) * rhs) % kModulus);
++}
++
++std::vector<uint64_t> NaiveNegacyclic(
++    const std::vector<uint64_t>& lhs, const std::vector<uint64_t>& rhs) {
++  const int degree = lhs.size();
++  std::vector<uint64_t> output(degree, 0);
++  for (int i = 0; i < degree; ++i) {
++    for (int j = 0; j < degree; ++j) {
++      uint64_t term = MulMod(lhs[i], rhs[j]);
++      int index = i + j;
++      if (index >= degree) {
++        index -= degree;
++        term = term == 0 ? 0 : kModulus - term;
++      }
++      output[index] = AddMod(output[index], term);
++    }
++  }
++  return output;
++}
++
++Parameters SmallOfflineParameters() {
++  Parameters params{};
++  params.db_rows = 16;
++  params.db_cols = 7;
++  params.db_record_bit_size = 8;
++  params.lwe_secret_dim = 8;
++  params.offline_lwe_secret_dim = 8;
++  params.lwe_modulus_bit_size = 32;
++  params.lwe_plaintext_bit_size = 8;
++  params.db_stack_cells = 1;
++  params.lwe_error_variance = 8;
++  params.prng_type = rlwe::PRNG_TYPE_HKDF;
++  params.offline_preprocessor_backend =
++      OfflinePreprocessorBackend::kYpirNtt;
++  params.offline_ring_log_n = 3;
++  params.offline_pad_block_count = 2;
++  params.offline_structured_pad_version =
++      kYpirOfflineStructuredPadVersion;
++  return params;
++}
++
++TEST(NegacyclicNtt64Test, MatchesNaiveExactArithmeticAbove32Bits) {
++  ASSERT_OK_AND_ASSIGN(auto ntt, lwe::NegacyclicNtt::Create(kModulus, 3));
++  std::vector<uint64_t> lhs = {
++      0, 1, kModulus - 1, uint64_t{1} << 40,
++      (uint64_t{1} << 48) + 17, 31, kModulus - 37, 41};
++  std::vector<uint64_t> rhs = {
++      43, uint64_t{1} << 33, 53, kModulus - 59,
++      (uint64_t{1} << 45) + 61, 67, 71, kModulus - 2};
++  ASSERT_OK_AND_ASSIGN(auto actual, ntt->Multiply64(lhs, rhs));
++  EXPECT_EQ(actual, NaiveNegacyclic(lhs, rhs));
++}
++
++TEST(YpirOfflinePreprocessorTest,
++     H2AndPadProductMatchDenseMaterializationElementwise) {
++  const Parameters params = SmallOfflineParameters();
++  const std::string seed(rlwe::SingleThreadHkdfPrng::SeedLength(), '\x5a');
++  ASSERT_OK_AND_ASSIGN(auto preprocessor,
++                       YpirOfflinePreprocessor::Create(params, seed));
++  ASSERT_OK_AND_ASSIGN(Matrix64 pad,
++                       preprocessor->MaterializePadForTesting());
++
++  Matrix64 secret(params.offline_lwe_secret_dim, 1);
++  for (uint64_t i = 0; i < secret.rows; ++i) {
++    secret.data[i] = i % 3 == 0 ? kModulus - 1 : i % 2;
++  }
++  ASSERT_OK_AND_ASSIGN(Matrix64 actual_as,
++                       preprocessor->ComputePadTimesSecret(secret));
++  for (uint64_t row = 0; row < pad.rows; ++row) {
++    uint64_t expected = 0;
++    for (uint64_t col = 0; col < pad.cols; ++col) {
++      expected = AddMod(
++          expected, MulMod(pad.data[row * pad.cols + col], secret.data[col]));
++    }
++    EXPECT_EQ(actual_as.data[row], expected) << "A2*s row " << row;
++  }
++
++  ASSERT_OK_AND_ASSIGN(auto database, Database::CreateFast(params));
++  ASSERT_OK_AND_ASSIGN(auto actual_hints,
++                       preprocessor->ComputeHint(*database));
++  const Database::LweMatrix64 pad_columns =
++      convertToHintlessPIRMatrixColumnForm64(
++          pad, params.db_rows, params.offline_lwe_secret_dim);
++  ASSERT_OK_AND_ASSIGN(auto expected_hints,
++                       database->TransposeMatrixProduct64(pad_columns));
++  EXPECT_EQ(actual_hints, expected_hints);
++
++  const OfflinePreprocessorMetadata metadata = preprocessor->Metadata();
++  EXPECT_EQ(metadata.backend, OfflinePreprocessorBackend::kYpirNtt);
++  EXPECT_EQ(metadata.ring_degree, 8);
++  EXPECT_EQ(metadata.pad_block_count, 2);
++  EXPECT_EQ(metadata.modulus, kModulus);
++  EXPECT_EQ(metadata.prg_domain, kYpirOfflinePadDomain);
++}
++
++TEST(YpirOfflinePreprocessorTest, EncryptsChallengesWithStructuredPad) {
++  const Parameters params = SmallOfflineParameters();
++  const std::string seed(rlwe::SingleThreadHkdfPrng::SeedLength(), '\x27');
++  ASSERT_OK_AND_ASSIGN(auto preprocessor,
++                       YpirOfflinePreprocessor::Create(params, seed));
++  ASSERT_OK_AND_ASSIGN(Matrix64 pad,
++                       preprocessor->MaterializePadForTesting());
++
++  BinaryMatrix challenges(2, params.db_rows);
++  for (uint64_t row = 0; row < challenges.rows; ++row) {
++    for (uint64_t col = 0; col < challenges.cols; ++col) {
++      challenges.data[row * challenges.cols + col] = (row + col) % 3 == 0;
++    }
++  }
++  LHE lhe(/*p_in=*/2, /*r_in=*/1);
++  ASSERT_OK_AND_ASSIGN(auto encrypted,
++                       preprocessor->EncryptChallenges(lhe, challenges));
++  ASSERT_EQ(encrypted.first.size(), challenges.rows);
++  ASSERT_EQ(encrypted.second.size(), challenges.rows);
++  for (uint64_t row = 0; row < challenges.rows; ++row) {
++    EXPECT_EQ(encrypted.second[row].rows,
++              static_cast<uint64_t>(params.offline_lwe_secret_dim));
++    Matrix decoded = lhe.decrypt_preproc64(
++        pad, encrypted.second[row], encrypted.first[row], /*blowup=*/1,
++        /*preproc=*/true);
++    ASSERT_EQ(decoded.rows, challenges.cols);
++    for (uint64_t col = 0; col < challenges.cols; ++col) {
++      EXPECT_EQ(decoded.data[col],
++                static_cast<Elem>(
++                    challenges.data[row * challenges.cols + col]))
++          << "challenge (" << row << "," << col << ")";
++    }
++  }
++}
++
++TEST(YpirOfflinePreprocessorTest, IsDeterministicAndRejectsDimensionDrift) {
++  Parameters params = SmallOfflineParameters();
++  const std::string seed(rlwe::SingleThreadHkdfPrng::SeedLength(), '\x3c');
++  ASSERT_OK_AND_ASSIGN(auto first,
++                       YpirOfflinePreprocessor::Create(params, seed));
++  ASSERT_OK_AND_ASSIGN(auto second,
++                       YpirOfflinePreprocessor::Create(params, seed));
++  ASSERT_OK_AND_ASSIGN(Matrix64 first_pad,
++                       first->MaterializePadForTesting());
++  ASSERT_OK_AND_ASSIGN(Matrix64 second_pad,
++                       second->MaterializePadForTesting());
++  ASSERT_EQ(first_pad.rows * first_pad.cols,
++            second_pad.rows * second_pad.cols);
++  for (uint64_t i = 0; i < first_pad.rows * first_pad.cols; ++i) {
++    EXPECT_EQ(first_pad.data[i], second_pad.data[i]);
++  }
++
++  params.offline_lwe_secret_dim = 7;
++  EXPECT_THAT(YpirOfflinePreprocessor::Create(params, seed),
++              StatusIs(absl::StatusCode::kInvalidArgument));
++  params = SmallOfflineParameters();
++  params.db_rows = 15;
++  EXPECT_THAT(YpirOfflinePreprocessor::Create(params, seed),
++              StatusIs(absl::StatusCode::kInvalidArgument));
++  params = SmallOfflineParameters();
++  params.offline_pad_block_count = 1;
++  EXPECT_THAT(YpirOfflinePreprocessor::Create(params, seed),
++              StatusIs(absl::StatusCode::kInvalidArgument));
++}
++
++TEST(YpirOfflinePreprocessorTest, InitializesBothExperimentRingDegrees) {
++  const std::string seed(rlwe::SingleThreadHkdfPrng::SeedLength(), '\x11');
++  for (int log_degree : {11, 12}) {
++    Parameters params = SmallOfflineParameters();
++    params.db_rows = 4096;
++    params.offline_ring_log_n = log_degree;
++    params.offline_lwe_secret_dim = 1 << log_degree;
++    params.offline_pad_block_count = params.db_rows >> log_degree;
++    ASSERT_OK_AND_ASSIGN(auto preprocessor,
++                         YpirOfflinePreprocessor::Create(params, seed));
++    EXPECT_EQ(preprocessor->Metadata().ring_degree, 1 << log_degree);
++  }
++}
++
++}  // namespace
++}  // namespace hintless_simplepir
++}  // namespace hintless_pir
+diff --git a/hintless_simplepir/parameters.h b/hintless_simplepir/parameters.h
+index c56e126..668449c 100644
+--- a/hintless_simplepir/parameters.h
++++ b/hintless_simplepir/parameters.h
+@@ -26,6 +26,21 @@
+ namespace hintless_pir {
+ namespace hintless_simplepir {
+ 
++// Selects the implementation of the public matrix used by the main
++// SimplePIR branch.  The dense backend is deliberately the zero value so that
++// existing aggregate initializers keep their original behaviour.
++enum class MainPreprocessorBackend : int {
++  kDenseLwe = 0,
++  kYpirNtt = 1,
++};
++
++// Selects the public matrix implementation used by the offline verification
++// LWE instance that computes H_2 = D^T A_2.
++enum class OfflinePreprocessorBackend : int {
++  kDenseLwe = 0,
++  kYpirNtt = 1,
++};
++
+ // Parameters of the hintless SimplePIR protocol.
+ struct Parameters {
+   using LweInteger = lwe::Integer;
+@@ -45,6 +60,21 @@ struct Parameters {
+   linpir::RlweParameters<RlweInteger> linpir_params;
+ 
+   rlwe::PrngType prng_type;
++
++  // Main preprocessing backend parameters.  They are ignored by kDenseLwe.
++  MainPreprocessorBackend main_preprocessor_backend =
++      MainPreprocessorBackend::kDenseLwe;
++  int main_ring_log_n = 0;
++  int main_pad_block_count = 0;
++  int structured_pad_version = 0;
++
++  // Offline verification preprocessing parameters.  The dense backend keeps
++  // the legacy 2816-dimensional LWE implementation unchanged.
++  OfflinePreprocessorBackend offline_preprocessor_backend =
++      OfflinePreprocessorBackend::kDenseLwe;
++  int offline_ring_log_n = 0;
++  int offline_pad_block_count = 0;
++  int offline_structured_pad_version = 0;
+ };
+ 
+ }  // namespace hintless_simplepir
+diff --git a/hintless_simplepir/serialization.proto b/hintless_simplepir/serialization.proto
+index bdd2268..a4b548e 100644
+--- a/hintless_simplepir/serialization.proto
++++ b/hintless_simplepir/serialization.proto
+@@ -23,6 +23,11 @@ import "shell_encryption/rns/serialization.proto";
+ // For faster allocations of sub-messages.
+ option cc_enable_arenas = true;
+ 
++enum SerializedMainPreprocessorBackend {
++  MAIN_PREPROCESSOR_DENSE_LWE = 0;
++  MAIN_PREPROCESSOR_YPIR_NTT = 1;
++}
++
+ // HintlessPir server's public parameters to be sent to the client before any
+ // queries are issued. Generated by the server.
+ message HintlessPirServerPublicParams {
+@@ -44,6 +49,17 @@ message HintlessPirServerPublicParams {
+   // The PRNG seed for sampling the "a" polynomials in the Galois automorphism
+   // key shared by all LinPIR instances.
+   optional bytes prng_seed_linpir_gk_pad_giant = 5;
++
++  // Auditable description of the main public-pad expansion. Older messages
++  // with these fields absent are interpreted as the dense legacy backend.
++  optional SerializedMainPreprocessorBackend main_preprocessor_backend = 6;
++  optional uint32 main_ring_degree = 7;
++  optional uint32 main_pad_block_count = 8;
++  optional uint32 structured_pad_version = 9;
++  optional fixed64 main_modulus = 10;
++  optional uint32 main_secret_dimension = 11;
++  optional string main_prg_domain = 12;
++  optional string main_security_status = 13;
+ }
+ 
+ message HintlessPirRequest {
+diff --git a/hintless_simplepir/server.cc b/hintless_simplepir/server.cc
+index ccf3beb..b351e06 100644
+--- a/hintless_simplepir/server.cc
++++ b/hintless_simplepir/server.cc
+@@ -17,6 +17,8 @@
+ 
+ #include <algorithm>
+ #include <cstddef>
++#include <cstring>
++#include <iostream>
+ #include <iterator>
+ #include <memory>
+ #include <string>
+@@ -30,6 +32,7 @@
+ #include "absl/strings/string_view.h"
+ 
+ #include "hintless_simplepir/database_hwy.h"
++#include "hintless_simplepir/main_preprocessor.h"
+ 
+ #include "hintless_simplepir/parameters.h"
+ #include "hintless_simplepir/serialization.pb.h"
+@@ -54,6 +57,20 @@ inline absl::Status CheckForValidPrngType(const Parameters& params) {
+   return absl::OkStatus();
+ }
+ 
++bool IsImportantStage0Timing(const char* stage) {
++  return std::strcmp(stage, "main_public_params_and_pad") == 0 ||
++         std::strcmp(stage, "main_hint_matrix_product") == 0;
++}
++
++void PrintStage0Timing(const char* stage, double duration_ms) {
++  if (!IsImportantStage0Timing(stage)) {
++    return;
++  }
++  std::cout << "[STAGE0_TIMING] scope=server stage=" << stage
++            << " duration_ms=" << duration_ms
++            << " duration_s=" << duration_ms / 1000 << std::endl;
++}
++
+ }  // namespace
+ 
+ absl::StatusOr<std::unique_ptr<Server>> Server::Create(
+@@ -177,14 +194,6 @@ absl::Status Server::GeneratePublicParams() {
+                           rlwe::SingleThreadHkdfPrng::GenerateSeed());
+     RLWE_ASSIGN_OR_RETURN(prng_seed_linpir_gk_pad_giant_,
+                           rlwe::SingleThreadHkdfPrng::GenerateSeed());
+-    
+-    // Generate the LWE "A" matrix.
+-    RLWE_ASSIGN_OR_RETURN(auto prng, rlwe::SingleThreadHkdfPrng::Create(
+-                                         prng_seed_lwe_query_pad_));
+-    RLWE_ASSIGN_OR_RETURN(
+-        auto pad,
+-        lwe::ExpandPad(params_.db_cols, params_.lwe_secret_dim, prng.get()));
+-    lwe_query_pad_ = std::make_unique<const lwe::Matrix>(std::move(pad));
+   } else {
+     RLWE_ASSIGN_OR_RETURN(prng_seed_lwe_query_pad_,
+                           rlwe::SingleThreadChaChaPrng::GenerateSeed());
+@@ -200,28 +209,10 @@ absl::Status Server::GeneratePublicParams() {
+                           rlwe::SingleThreadChaChaPrng::GenerateSeed());
+     RLWE_ASSIGN_OR_RETURN(prng_seed_linpir_gk_pad_giant_,
+                           rlwe::SingleThreadChaChaPrng::GenerateSeed());
+-
+-    RLWE_ASSIGN_OR_RETURN(auto prng, rlwe::SingleThreadChaChaPrng::Create(
+-                                         prng_seed_lwe_query_pad_));
+-    RLWE_ASSIGN_OR_RETURN(
+-        auto pad,
+-        lwe::ExpandPad(params_.db_cols, params_.lwe_secret_dim, prng.get()));
+-
+-    /*
+-    // if solinas_32 is true, take modulo of pad
+-    // TODO: Note that this doesn't guarantee uniform pad over Z_q; need rejection sampling for that; for this prototype, we are ignoring this.
+-    // Sampling of A doesn't affect runtime costs, so ignoring rejection sampling of A for now.
+-    uint64_t rows = pad.rows();
+-    uint64_t cols = pad.cols();
+-    for (uint64_t i = 0; i < rows; i++) {
+-      for (uint64_t j = 0; j < cols; j++) {
+-        pad(i, j) = fast_mod_max_64(pad(i, j));
+-      }
+-    }
+-    */
+-
+-    lwe_query_pad_ = std::make_unique<const lwe::Matrix>(std::move(pad));
+   }
++  RLWE_ASSIGN_OR_RETURN(
++      main_preprocessor_,
++      CreateMainPreprocessor(params_, prng_seed_lwe_query_pad_));
+   return absl::OkStatus();
+ }
+ 
+@@ -256,13 +247,10 @@ absl::Status Server::Preprocess() {
+ 
+   std::cout << "Generated public params" << std::endl;
+ 
+-  // Make sure the hint is up to date.
+-  RLWE_RETURN_IF_ERROR(database_->UpdateLweQueryPad(lwe_query_pad_.get()));
+-#ifdef FAKE_RUN
+-  RLWE_RETURN_IF_ERROR(database_->UpdateHintsFake());
+-#else
+-  RLWE_RETURN_IF_ERROR(database_->UpdateHints());
+-#endif
++  // Make sure the hint is up to date using the selected runtime backend.
++  RLWE_ASSIGN_OR_RETURN(auto hints,
++                        main_preprocessor_->ComputeHint(*database_));
++  RLWE_RETURN_IF_ERROR(database_->SetHints(std::move(hints)));
+   //std::cout << "Updated hints" << std::endl;
+ 
+   RlweInteger lwe_modulus = RlweInteger{1} << params_.lwe_modulus_bit_size;
+@@ -286,7 +274,7 @@ absl::Status Server::Preprocess() {
+ 
+ 
+     for (const Database::LweMatrix& hint : database_->Hints()) {
+-    
++
+       std::vector<std::vector<RlweInteger>> hint_mod_tk =
+           EncodeLweMatrix(hint, lwe_modulus, plaintext_modulus);
+       RLWE_ASSIGN_OR_RETURN(
+@@ -319,19 +307,26 @@ absl::Status Server::Preprocess() {
+ }
+ 
+ absl::Status Server::PreprocessBSGS() {
++  const double preprocess_start = currentDateTime();
++
+   // Refresh the PRNG seeds.
++  double stage_start = currentDateTime();
+   RLWE_RETURN_IF_ERROR(GeneratePublicParams()); // Generates gk_pad_seed for BSGS and also non-BSGS case
+-  
++  PrintStage0Timing("main_public_params_and_pad",
++                    currentDateTime() - stage_start);
++
+   //std::cout << "Generated public params" << std::endl;
+ 
+-  // Make sure the hint is up to date.
+-  RLWE_RETURN_IF_ERROR(database_->UpdateLweQueryPad(lwe_query_pad_.get()));
+-#ifdef FAKE_RUN
+-  RLWE_RETURN_IF_ERROR(database_->UpdateHintsFake());
+-#else
+-  RLWE_RETURN_IF_ERROR(database_->UpdateHints());
+-#endif
+-  //RLWE_RETURN_IF_ERROR(database_->UpdateHints());
++  // Make sure the hint is up to date using the selected runtime backend.
++  stage_start = currentDateTime();
++  RLWE_ASSIGN_OR_RETURN(auto hints,
++                        main_preprocessor_->ComputeHint(*database_));
++  PrintStage0Timing("main_hint_matrix_product",
++                    currentDateTime() - stage_start);
++  stage_start = currentDateTime();
++  RLWE_RETURN_IF_ERROR(database_->SetHints(std::move(hints)));
++  PrintStage0Timing("main_hint_install_output",
++                    currentDateTime() - stage_start);
+   //std::cout << "Updated hints" << std::endl;
+ 
+   RlweInteger lwe_modulus = RlweInteger{1} << params_.lwe_modulus_bit_size;
+@@ -346,6 +341,8 @@ absl::Status Server::PreprocessBSGS() {
+   linpir_databases_.clear();
+   linpir_databases_.resize(rlwe_contexts_.size());
+   for (int k = 0; k < rlwe_contexts_.size(); ++k) {
++    double hint_encode_ms = 0;
++    double database_create_ms = 0;
+     //std::cout << "Creating LinPIR databases and servers" << std::endl;
+     RlweInteger plaintext_modulus = rlwe_contexts_[k]->PlaintextModulus();
+ 
+@@ -355,15 +352,20 @@ absl::Status Server::PreprocessBSGS() {
+ 
+ 
+     for (const Database::LweMatrix& hint : database_->Hints()) {
+-    
++      stage_start = currentDateTime();
+       std::vector<std::vector<RlweInteger>> hint_mod_tk =
+           EncodeLweMatrix(hint, lwe_modulus, plaintext_modulus);
++      hint_encode_ms += currentDateTime() - stage_start;
++      stage_start = currentDateTime();
+       RLWE_ASSIGN_OR_RETURN(
+           auto linpir_database,
+           LinPirDatabase::CreateBSGS(params_.linpir_params, rlwe_contexts_[k].get(),
+                                  hint_mod_tk));
++      database_create_ms += currentDateTime() - stage_start;
+       linpir_databases_mod_tk.push_back(std::move(linpir_database));
+     }
++    PrintStage0Timing("linpir_hint_modulus_encode", hint_encode_ms);
++    PrintStage0Timing("linpir_database_create_bsgs", database_create_ms);
+     //std::cout << "Created LinPIR database" << std::endl;
+     std::vector<LinPirDatabase*> linpir_databases_ptrs;
+     std::transform(linpir_databases_mod_tk.begin(),
+@@ -371,6 +373,7 @@ absl::Status Server::PreprocessBSGS() {
+                    std::back_inserter(linpir_databases_ptrs),
+                    [](auto& ptr) { return ptr.get(); });
+     //std::cout << "Transform done" << std::endl;
++    stage_start = currentDateTime();
+     RLWE_ASSIGN_OR_RETURN(
+         auto linpir_server_mod_tk,
+         LinPirServer::CreateBSGS(params_.linpir_params, rlwe_contexts_[k].get(),
+@@ -378,13 +381,21 @@ absl::Status Server::PreprocessBSGS() {
+                              prng_seed_linpir_ct_pads_[k],
+                              prng_seed_linpir_gk_pad_baby_,
+                              prng_seed_linpir_gk_pad_giant_));
+-    
++    PrintStage0Timing("linpir_server_create_bsgs",
++                      currentDateTime() - stage_start);
++
++    stage_start = currentDateTime();
+     RLWE_RETURN_IF_ERROR(linpir_server_mod_tk->PreprocessBSGS());
++    PrintStage0Timing("linpir_server_preprocess_bsgs",
++                      currentDateTime() - stage_start);
+ 
+     linpir_databases_[k] = std::move(linpir_databases_mod_tk);
+     linpir_servers_[k] = std::move(linpir_server_mod_tk);
+   }
+ 
++  PrintStage0Timing("global_main_preprocess_bsgs_total",
++                    currentDateTime() - preprocess_start);
++
+   return absl::OkStatus();
+ }
+ 
+@@ -404,7 +415,7 @@ absl::StatusOr<HintlessPirResponse> Server::HandleRequest(
+         DeserializeLweCiphertext(request.ct_query_vector());
+     RLWE_ASSIGN_OR_RETURN(std::vector<Database::LweVector> ct_records,
+                           database_->InnerProductWith(ct_query_vector));
+-    
++
+     //std::cout<<"Ser LWE ciphertext"<<std::endl;
+     for (auto& ct_record : ct_records) {
+       *response.add_ct_records() = SerializeLweCiphertext(ct_record);
+@@ -412,7 +423,7 @@ absl::StatusOr<HintlessPirResponse> Server::HandleRequest(
+   }
+   end_lwe = currentDateTime();
+   std::cout << "[==> TIMER  <==] Server-only Online time for D*u (LWE): " << (end_lwe-start_lwe) << " ms | " << (end_lwe-start_lwe)/1000 << " sec" << std::endl;
+-  
++
+   start_Rlwe = currentDateTime();
+   // Handle the LinPIR requests.
+   int num_linpir_requests = request.linpir_ct_bs_size();
+@@ -449,7 +460,7 @@ absl::StatusOr<HintlessPirResponse> Server::HandleRequestBSGS(
+         DeserializeLweCiphertext(request.ct_query_vector());
+     RLWE_ASSIGN_OR_RETURN(std::vector<Database::LweVector> ct_records,
+                           database_->InnerProductWith(ct_query_vector));
+-    
++
+     //std::cout<<"Ser LWE ciphertext"<<std::endl;
+     for (auto& ct_record : ct_records) {
+       *response.add_ct_records() = SerializeLweCiphertext(ct_record);
+@@ -457,7 +468,7 @@ absl::StatusOr<HintlessPirResponse> Server::HandleRequestBSGS(
+   }
+   end_lwe = currentDateTime();
+   std::cout << BLUE << "[==> TIMER  <==] Server-only Online time for D*u (LWE): " << (end_lwe-start_lwe) << " ms | " << (end_lwe-start_lwe)/1000 << " sec" << END << std::endl;
+-  
++
+   start_Rlwe = currentDateTime();
+   // Handle the LinPIR requests.
+   int num_linpir_requests = request.linpir_ct_bs_size();
+@@ -534,13 +545,13 @@ absl::StatusOr<HintlessPirResponse> Server::HandleRequestSkipLinPir(
+ 
+   HintlessPirResponse response;
+   // Handle the LWE part of the request.
+-  
++
+   //std::cout<<"Deser LWE ciphertext"<<std::endl;
+   Database::LweVector ct_query_vector =
+       DeserializeLweCiphertext(request.ct_query_vector());
+   RLWE_ASSIGN_OR_RETURN(std::vector<Database::LweVector> ct_records,
+                         database_->InnerProductWith(ct_query_vector));
+-  
++
+   //std::cout<<"Ser LWE ciphertext"<<std::endl;
+   for (auto& ct_record : ct_records) {
+     *response.add_ct_records() = SerializeLweCiphertext(ct_record);
+@@ -559,53 +570,68 @@ HintlessPirServerPublicParams Server::GetPublicParams() const {
+   output.set_prng_seed_linpir_gk_pad_baby(prng_seed_linpir_gk_pad_baby_);
+   output.set_prng_seed_linpir_gk_pad_giant(prng_seed_linpir_gk_pad_giant_);
+ 
++  if (main_preprocessor_ != nullptr) {
++    MainPreprocessorMetadata metadata = main_preprocessor_->Metadata();
++    output.set_main_preprocessor_backend(
++        metadata.backend == MainPreprocessorBackend::kYpirNtt
++            ? MAIN_PREPROCESSOR_YPIR_NTT
++            : MAIN_PREPROCESSOR_DENSE_LWE);
++    output.set_main_ring_degree(metadata.ring_degree);
++    output.set_main_pad_block_count(metadata.pad_block_count);
++    output.set_structured_pad_version(metadata.structured_pad_version);
++    output.set_main_modulus(metadata.modulus);
++    output.set_main_secret_dimension(metadata.secret_dimension);
++    output.set_main_prg_domain(metadata.prg_domain);
++    output.set_main_security_status(metadata.security_status);
++  }
++
+   return output;
+ }
+ 
+ absl::StatusOr<std::vector<Database::LweMatrix>> Server::TransposeProduct(
+     const Database::LweMatrix& A, bool secondary) {
+-  
++
+   return database_->TransposeMatrixProduct(A, secondary);
+ }
+ 
+ absl::StatusOr<std::vector<Database::LweMatrix64>> Server::TransposeProduct64(
+     const Database::LweMatrix64& A, bool secondary) {
+-  
++
+   return database_->TransposeMatrixProduct64(A, secondary);
+ }
+ 
+ absl::StatusOr<std::vector<Database::LweMatrix>> Server::DirectProduct(
+     const Database::LweMatrix& A, bool secondary) {
+-  
++
+   return database_->DirectMatrixProduct(A, secondary);
+ }
+ 
+ std::vector<Database::LweMatrix> Server::TransposeProductFake() {
+-  
++
+   return database_->TransposeMatrixProductFake();
+ }
+ 
+ std::vector<Database::LweMatrix64> Server::TransposeProductFake64() {
+-  
++
+   return database_->TransposeMatrixProductFake64();
+ }
+ 
+ std::vector<Database::LweMatrix> Server::DirectProductFake() {
+-  
++
+   return database_->DirectMatrixProductFake();
+ }
+ 
+ // Outermost layer is shards, then D^T * each ciphertext
+ absl::StatusOr<std::vector<std::vector<Database::LweVector>>> Server::TransposeProductCiphertexts(
+     const std::vector<Database::LweVector>& cts) {
+-  
++
+   return database_->TransposeMatrixCiphertextProducts(cts);
+ }
+ 
+ // Outermost layer is shards, then D^T * each ciphertext
+ absl::StatusOr<std::vector<std::vector<Database::LweVector64>>> Server::TransposeProductCiphertexts64(
+     const std::vector<Database::LweVector64>& cts) {
+-  
++
+   return database_->TransposeMatrixCiphertextProducts64(cts);
+ }
+ 
+diff --git a/hintless_simplepir/server.h b/hintless_simplepir/server.h
+index f111c41..9ddf941 100644
+--- a/hintless_simplepir/server.h
++++ b/hintless_simplepir/server.h
+@@ -27,6 +27,7 @@
+ #include "absl/strings/string_view.h"
+ 
+ #include "hintless_simplepir/database_hwy.h"
++#include "hintless_simplepir/main_preprocessor.h"
+ 
+ #include "hintless_simplepir/parameters.h"
+ #include "hintless_simplepir/serialization.pb.h"
+@@ -103,7 +104,15 @@ class Server {
+ 
+   Database* GetDatabase() const { return database_.get(); }
+ 
+-  const lwe::Matrix* LweQueryPad() const { return lwe_query_pad_.get(); }
++  const lwe::Matrix* LweQueryPad() const {
++    return main_preprocessor_ == nullptr
++               ? nullptr
++               : main_preprocessor_->DensePadIfMaterialized();
++  }
++
++  const MainPreprocessor* MainPreprocessorForTesting() const {
++    return main_preprocessor_.get();
++  }
+ 
+  private:
+   using RlweInteger = Parameters::RlweInteger;
+@@ -124,7 +133,7 @@ class Server {
+   absl::Status GeneratePublicParams();
+ 
+   // Returns if the server has been preprocessed to accept requests.
+-  bool IsPreprocessed() const { return lwe_query_pad_ != nullptr; }
++  bool IsPreprocessed() const { return main_preprocessor_ != nullptr; }
+ 
+   // The parameters of the SimplePIR protocol.
+   const Parameters params_;
+@@ -135,7 +144,7 @@ class Server {
+   std::vector<std::unique_ptr<const RlweRnsContext>> rlwe_contexts_;
+ 
+   std::string prng_seed_lwe_query_pad_;
+-  std::unique_ptr<const lwe::Matrix> lwe_query_pad_;
++  std::unique_ptr<MainPreprocessor> main_preprocessor_;
+ 
+   std::vector<std::string> prng_seed_linpir_ct_pads_;
+   std::string prng_seed_linpir_gk_pad_;
+diff --git a/lwe/BUILD b/lwe/BUILD
+index 34def6e..1bc59c7 100644
+--- a/lwe/BUILD
++++ b/lwe/BUILD
+@@ -56,6 +56,23 @@ cc_library(
+     ],
+ )
+ 
++# Exact negacyclic convolution over an NTT-friendly prime field.
++cc_library(
++    name = "negacyclic_ntt",
++    srcs = ["negacyclic_ntt.cc"],
++    hdrs = ["negacyclic_ntt.h"],
++    deps = [
++        "@com_github_google_shell-encryption//shell_encryption:montgomery",
++        "@com_github_google_shell-encryption//shell_encryption:ntt_parameters",
++        "@com_github_google_shell-encryption//shell_encryption:polynomial",
++        "@com_github_google_shell-encryption//shell_encryption:statusor_fork",
++        "@com_google_absl//absl/status",
++        "@com_google_absl//absl/status:statusor",
++        "@com_google_absl//absl/strings",
++        "@com_google_absl//absl/types:span",
++    ],
++)
++
+ cc_library(
+     name = "sample_error",
+     hdrs = [
+diff --git a/lwe/negacyclic_ntt.cc b/lwe/negacyclic_ntt.cc
+new file mode 100644
+index 0000000..39f68c7
+--- /dev/null
++++ b/lwe/negacyclic_ntt.cc
+@@ -0,0 +1,178 @@
++// Copyright 2026
++// Licensed under the Apache License, Version 2.0.
++
++#include "lwe/negacyclic_ntt.h"
++
++#include <cstdint>
++#include <memory>
++#include <utility>
++#include <vector>
++
++#include "absl/status/status.h"
++#include "absl/status/statusor.h"
++#include "absl/strings/str_cat.h"
++#include "shell_encryption/status_macros.h"
++
++namespace hintless_pir {
++namespace lwe {
++
++absl::StatusOr<std::unique_ptr<NegacyclicNtt>> NegacyclicNtt::Create(
++    uint64_t modulus, int log_degree) {
++  if (log_degree <= 0 || log_degree >= 31) {
++    return absl::InvalidArgumentError("`log_degree` must be in [1, 30].");
++  }
++  const uint64_t two_degree = uint64_t{1} << (log_degree + 1);
++  if (modulus % two_degree != 1) {
++    return absl::InvalidArgumentError(absl::StrCat(
++        "NTT modulus must equal 1 mod 2N; modulus=", modulus,
++        ", degree=", uint64_t{1} << log_degree));
++  }
++  RLWE_ASSIGN_OR_RETURN(auto modulus_params,
++                        ModularInt::Params::Create(modulus));
++  RLWE_ASSIGN_OR_RETURN(
++      auto ntt_params,
++      rlwe::InitializeNttParameters<ModularInt>(log_degree,
++                                                modulus_params.get()));
++  return std::unique_ptr<NegacyclicNtt>(new NegacyclicNtt(
++      modulus, log_degree, std::move(modulus_params), std::move(ntt_params)));
++}
++
++absl::StatusOr<NegacyclicNtt::Polynomial> NegacyclicNtt::Forward(
++    absl::Span<const uint32_t> coefficients) const {
++  if (coefficients.size() != degree()) {
++    return absl::InvalidArgumentError(absl::StrCat(
++        "coefficient count must equal ring degree: got ",
++        coefficients.size(), ", want ", degree()));
++  }
++  std::vector<ModularInt> imported;
++  imported.reserve(coefficients.size());
++  for (uint32_t coefficient : coefficients) {
++    if (coefficient >= modulus_) {
++      return absl::InvalidArgumentError(
++          "coefficient is not in canonical Z_q representation");
++    }
++    RLWE_ASSIGN_OR_RETURN(
++        auto value, ModularInt::ImportInt(coefficient, modulus_params_.get()));
++    imported.push_back(value);
++  }
++  Polynomial result = Polynomial::ConvertToNtt(
++      std::move(imported), &ntt_params_, modulus_params_.get());
++  if (!result.IsValid()) {
++    return absl::InternalError("forward negacyclic NTT failed");
++  }
++  return result;
++}
++
++absl::StatusOr<std::vector<uint32_t>> NegacyclicNtt::Inverse(
++    const Polynomial& polynomial) const {
++  if (modulus_ > UINT32_MAX) {
++    return absl::FailedPreconditionError(
++        "32-bit inverse requested for a modulus larger than uint32_t");
++  }
++  if (!polynomial.IsValid() || polynomial.Len() != degree()) {
++    return absl::InvalidArgumentError(
++        "NTT polynomial has the wrong degree");
++  }
++  std::vector<ModularInt> imported =
++      polynomial.InverseNtt(&ntt_params_, modulus_params_.get());
++  if (imported.size() != degree()) {
++    return absl::InternalError("inverse negacyclic NTT failed");
++  }
++  std::vector<uint32_t> result;
++  result.reserve(imported.size());
++  for (const ModularInt& coefficient : imported) {
++    result.push_back(
++        static_cast<uint32_t>(coefficient.ExportInt(modulus_params_.get())));
++  }
++  return result;
++}
++
++absl::StatusOr<NegacyclicNtt::Polynomial> NegacyclicNtt::Forward64(
++    absl::Span<const uint64_t> coefficients) const {
++  if (coefficients.size() != degree()) {
++    return absl::InvalidArgumentError(absl::StrCat(
++        "coefficient count must equal ring degree: got ",
++        coefficients.size(), ", want ", degree()));
++  }
++  std::vector<ModularInt> imported;
++  imported.reserve(coefficients.size());
++  for (uint64_t coefficient : coefficients) {
++    if (coefficient >= modulus_) {
++      return absl::InvalidArgumentError(
++          "coefficient is not in canonical Z_q representation");
++    }
++    RLWE_ASSIGN_OR_RETURN(
++        auto value, ModularInt::ImportInt(coefficient, modulus_params_.get()));
++    imported.push_back(value);
++  }
++  Polynomial result = Polynomial::ConvertToNtt(
++      std::move(imported), &ntt_params_, modulus_params_.get());
++  if (!result.IsValid()) {
++    return absl::InternalError("forward negacyclic NTT failed");
++  }
++  return result;
++}
++
++absl::StatusOr<std::vector<uint64_t>> NegacyclicNtt::Inverse64(
++    const Polynomial& polynomial) const {
++  if (!polynomial.IsValid() || polynomial.Len() != degree()) {
++    return absl::InvalidArgumentError(
++        "NTT polynomial has the wrong degree");
++  }
++  std::vector<ModularInt> imported =
++      polynomial.InverseNtt(&ntt_params_, modulus_params_.get());
++  if (imported.size() != degree()) {
++    return absl::InternalError("inverse negacyclic NTT failed");
++  }
++  std::vector<uint64_t> result;
++  result.reserve(imported.size());
++  for (const ModularInt& coefficient : imported) {
++    result.push_back(coefficient.ExportInt(modulus_params_.get()));
++  }
++  return result;
++}
++
++absl::StatusOr<std::vector<uint32_t>> NegacyclicNtt::Multiply(
++    absl::Span<const uint32_t> lhs,
++    absl::Span<const uint32_t> rhs) const {
++  RLWE_ASSIGN_OR_RETURN(Polynomial lhs_ntt, Forward(lhs));
++  RLWE_ASSIGN_OR_RETURN(Polynomial rhs_ntt, Forward(rhs));
++  RLWE_RETURN_IF_ERROR(lhs_ntt.MulInPlace(rhs_ntt, modulus_params_.get()));
++  return Inverse(lhs_ntt);
++}
++
++absl::StatusOr<std::vector<uint64_t>> NegacyclicNtt::Multiply64(
++    absl::Span<const uint64_t> lhs,
++    absl::Span<const uint64_t> rhs) const {
++  RLWE_ASSIGN_OR_RETURN(Polynomial lhs_ntt, Forward64(lhs));
++  RLWE_ASSIGN_OR_RETURN(Polynomial rhs_ntt, Forward64(rhs));
++  RLWE_RETURN_IF_ERROR(lhs_ntt.MulInPlace(rhs_ntt, modulus_params_.get()));
++  return Inverse64(lhs_ntt);
++}
++
++NegacyclicNtt::Polynomial NegacyclicNtt::ZeroNtt() const {
++  return Polynomial(degree(), modulus_params_.get());
++}
++
++absl::Status NegacyclicNtt::MultiplyInPlace(Polynomial& lhs,
++                                             const Polynomial& rhs) const {
++  if (!lhs.IsValid() || !rhs.IsValid() || lhs.Len() != degree() ||
++      rhs.Len() != degree()) {
++    return absl::InvalidArgumentError("NTT polynomial has the wrong degree");
++  }
++  return lhs.MulInPlace(rhs, modulus_params_.get());
++}
++
++absl::Status NegacyclicNtt::FusedMultiplyAddInPlace(
++    Polynomial& accumulator, const Polynomial& lhs,
++    const Polynomial& rhs) const {
++  if (!accumulator.IsValid() || !lhs.IsValid() || !rhs.IsValid() ||
++      accumulator.Len() != degree() || lhs.Len() != degree() ||
++      rhs.Len() != degree()) {
++    return absl::InvalidArgumentError("NTT polynomial has the wrong degree");
++  }
++  return accumulator.FusedMulAddInPlace(lhs, rhs, modulus_params_.get());
++}
++
++}  // namespace lwe
++}  // namespace hintless_pir
+diff --git a/lwe/negacyclic_ntt.h b/lwe/negacyclic_ntt.h
+new file mode 100644
+index 0000000..8c5a79a
+--- /dev/null
++++ b/lwe/negacyclic_ntt.h
+@@ -0,0 +1,80 @@
++// Copyright 2026
++// Licensed under the Apache License, Version 2.0.
++
++#ifndef HINTLESS_PIR_LWE_NEGACYCLIC_NTT_H_
++#define HINTLESS_PIR_LWE_NEGACYCLIC_NTT_H_
++
++#include <cstdint>
++#include <memory>
++#include <vector>
++
++#include "absl/status/statusor.h"
++#include "absl/types/span.h"
++#include "shell_encryption/montgomery.h"
++#include "shell_encryption/ntt_parameters.h"
++#include "shell_encryption/polynomial.h"
++
++namespace hintless_pir {
++namespace lwe {
++
++// A small checked wrapper around SHELL's exact NTT implementation.  All
++// products are in Z_q[X]/(X^degree + 1); no modulus switching, rounding, or
++// coefficient truncation is performed.
++class NegacyclicNtt {
++ public:
++  using ModularInt = rlwe::MontgomeryInt<uint64_t>;
++  using Polynomial = rlwe::Polynomial<ModularInt>;
++
++  static absl::StatusOr<std::unique_ptr<NegacyclicNtt>> Create(
++      uint64_t modulus, int log_degree);
++
++  int degree() const { return 1 << log_degree_; }
++  int log_degree() const { return log_degree_; }
++  uint64_t modulus() const { return modulus_; }
++
++  absl::StatusOr<Polynomial> Forward(
++      absl::Span<const uint32_t> coefficients) const;
++  absl::StatusOr<std::vector<uint32_t>> Inverse(
++      const Polynomial& polynomial) const;
++  absl::StatusOr<std::vector<uint32_t>> Multiply(
++      absl::Span<const uint32_t> lhs,
++      absl::Span<const uint32_t> rhs) const;
++
++  // 64-bit coefficient variants for exact arithmetic under the offline
++  // verification modulus.  These use the same Montgomery/NTT representation
++  // as the 32-bit methods and never round or switch moduli.
++  absl::StatusOr<Polynomial> Forward64(
++      absl::Span<const uint64_t> coefficients) const;
++  absl::StatusOr<std::vector<uint64_t>> Inverse64(
++      const Polynomial& polynomial) const;
++  absl::StatusOr<std::vector<uint64_t>> Multiply64(
++      absl::Span<const uint64_t> lhs,
++      absl::Span<const uint64_t> rhs) const;
++
++  Polynomial ZeroNtt() const;
++  absl::Status MultiplyInPlace(Polynomial& lhs,
++                               const Polynomial& rhs) const;
++  absl::Status FusedMultiplyAddInPlace(Polynomial& accumulator,
++                                       const Polynomial& lhs,
++                                       const Polynomial& rhs) const;
++
++ private:
++  NegacyclicNtt(
++      uint64_t modulus, int log_degree,
++      std::unique_ptr<const ModularInt::Params> modulus_params,
++      rlwe::NttParameters<ModularInt> ntt_params)
++      : modulus_(modulus),
++        log_degree_(log_degree),
++        modulus_params_(std::move(modulus_params)),
++        ntt_params_(std::move(ntt_params)) {}
++
++  uint64_t modulus_;
++  int log_degree_;
++  std::unique_ptr<const ModularInt::Params> modulus_params_;
++  rlwe::NttParameters<ModularInt> ntt_params_;
++};
++
++}  // namespace lwe
++}  // namespace hintless_pir
++
++#endif  // HINTLESS_PIR_LWE_NEGACYCLIC_NTT_H_
+diff --git a/lwe/sample_error.h b/lwe/sample_error.h
+index c39220f..3180371 100644
+--- a/lwe/sample_error.h
++++ b/lwe/sample_error.h
+@@ -235,7 +235,10 @@ static absl::Status SampleUniformVectorInPlaceCustomBound(Vector& buffer, Prng*
+   if (max_bits > sizeof(Integer)*8) {
+     return absl::InvalidArgumentError("max_bits must be less than or equal to the number of bits in Integer.");
+   }
+-  Integer max_bits_mask = (Integer{1} << max_bits) - 1;
++  const Integer max_bits_mask =
++      max_bits == static_cast<int>(sizeof(Integer) * 8)
++          ? ~Integer{0}
++          : (Integer{1} << max_bits) - 1;
+ 
+   if (sizeof(Integer) == 4) { // 32-bit values
+     constexpr uint64_t low_mask = 0x00000000ffffffff;
+@@ -306,7 +309,7 @@ static absl::StatusOr<Matrix> SampleUniformMatrix(int num_rows, int num_cols,
+   for (int i = 0; i < num_rows; ++i) {
+     Vector buffer = Vector::Zero(num_cols);
+     RLWE_RETURN_IF_ERROR(SampleUniformVectorInPlace(buffer, prng));
+-    output.row(i) += buffer;
++    output.row(i) = buffer.transpose();
+   }
+   return output;
+ }
+@@ -329,7 +332,7 @@ static absl::StatusOr<Matrix> SampleUniformMatrixCustomBound(int num_rows, int n
+   for (int i = 0; i < num_rows; ++i) {
+     Vector buffer = Vector::Zero(num_cols);
+     RLWE_RETURN_IF_ERROR(SampleUniformVectorInPlaceCustomBound(buffer, prng, max_inc, max_bits));
+-    output.row(i) += buffer;
++    output.row(i) = buffer.transpose();
+   }
+   return output;
+ }
+diff --git a/verisimplepir/src/lib/pir/lhe.cpp b/verisimplepir/src/lib/pir/lhe.cpp
+index 28e407c..ef13bde 100644
+--- a/verisimplepir/src/lib/pir/lhe.cpp
++++ b/verisimplepir/src/lib/pir/lhe.cpp
+@@ -96,7 +96,11 @@ Matrix LHE::sampleSecretKeyTernary() const {
+ 
+ // column vector where # of rows is always n
+ Matrix64 LHE::sampleSecretKeyTernary64() const {
+-    Matrix64 sk(n, 1);
++    return sampleSecretKeyTernary64(n);
++};
++
++Matrix64 LHE::sampleSecretKeyTernary64(uint64_t dimension) const {
++    Matrix64 sk(dimension, 1);
+     randomTernary64(sk);
+     Elem64 two = 2;
+     for (uint64_t i = 0; i < sk.rows; i++){
+@@ -134,7 +138,7 @@ Matrix LHE::encrypt(const Matrix& A, const Matrix& sk, const Matrix& pt, bool pr
+     // constant(&ciphertext); std::cout << "change me back!\n";
+ 
+ 
+-    Matrix A_sk = matMulVec(A, sk); 
++    Matrix A_sk = matMulVec(A, sk);
+ 
+     matAddInPlace(ciphertext, A_sk);
+ 
+@@ -166,12 +170,22 @@ Matrix64 LHE::encrypt64(const Matrix64& A, const Matrix64& sk, const Matrix64& p
+         assert(false);
+     }
+ 
+-    Matrix64 ciphertext(A.rows, 1);
+-    error64(ciphertext);
+-    // constant(&ciphertext); std::cout << "change me back!\n";
++    Matrix64 A_sk = matMulVec64(A, sk);
++
++    return encrypt64FromPadProduct(A_sk, pt, preproc);
++};
+ 
++Matrix64 LHE::encrypt64FromPadProduct(const Matrix64& A_sk,
++                                      const Matrix64& pt,
++                                      bool preproc) const {
++    if (A_sk.rows != pt.rows || A_sk.cols != 1 || pt.cols != 1) {
++        std::cout << "Pad product or plaintext dimension mismatch!\n";
++        assert(false);
++    }
+ 
+-    Matrix64 A_sk = matMulVec64(A, sk); 
++    Matrix64 ciphertext(A_sk.rows, 1);
++    error64(ciphertext);
++    // constant(&ciphertext); std::cout << "change me back!\n";
+ 
+     matAddInPlace64(ciphertext, A_sk);
+ 
+@@ -222,7 +236,7 @@ Matrix LHE::decrypt(const Matrix& H, const Matrix& sk, const Matrix& ct, bool pr
+             pt.data[i] = 0;
+         }
+     }
+-    
++
+ 
+ 
+     return pt;
+@@ -298,4 +312,4 @@ Matrix LHE::decrypt_preproc64(const Matrix64& H, const Matrix64& sk, const Matri
+     }
+ 
+     return pt;
+-}
+\ No newline at end of file
++}
+diff --git a/verisimplepir/src/lib/pir/lhe.h b/verisimplepir/src/lib/pir/lhe.h
+index 6ac0aec..194ade4 100644
+--- a/verisimplepir/src/lib/pir/lhe.h
++++ b/verisimplepir/src/lib/pir/lhe.h
+@@ -55,14 +55,19 @@ public:
+     Matrix sampleSecretKey() const;  // column vector where # of rows is always n
+     Matrix sampleSecretKeyTernary() const;  // column vector where # of rows is always n
+     Matrix64 sampleSecretKeyTernary64() const;  // column vector where # of rows is always n
++    Matrix64 sampleSecretKeyTernary64(uint64_t dimension) const;
+ 
+     void randomPlaintext(Matrix& pt) const;
+ 
+     // plaintext has length m, where m is in the parameter used to sample m
+-    Matrix encrypt(const Matrix& A, const Matrix& sk, const Matrix& pt, bool preproc = false) const;  
++    Matrix encrypt(const Matrix& A, const Matrix& sk, const Matrix& pt, bool preproc = false) const;
+ 
+     // plaintext has length m, where m is in the parameter used to sample m
+-    Matrix64 encrypt64(const Matrix64& A, const Matrix64& sk, const Matrix64& pt, bool preproc = false) const;  
++    Matrix64 encrypt64(const Matrix64& A, const Matrix64& sk, const Matrix64& pt, bool preproc = false) const;
++
++    // Completes encryption when a public-pad backend has already computed A*s.
++    Matrix64 encrypt64FromPadProduct(const Matrix64& A_sk, const Matrix64& pt,
++                                     bool preproc = false) const;
+ 
+     // length of ct should match the # of rows of H
+     Matrix decrypt(const Matrix& H, const Matrix& sk, const Matrix& ct, bool preproc = false) const;
+diff --git a/verisimplepir/src/lib/pir/mat.cpp b/verisimplepir/src/lib/pir/mat.cpp
+index ada8c6c..6f99da8 100644
+--- a/verisimplepir/src/lib/pir/mat.cpp
++++ b/verisimplepir/src/lib/pir/mat.cpp
+@@ -10,7 +10,7 @@ void randomInner(Matrix& mat, PRNG& prng, const Elem max) {
+     if (max == 0) {
+         dist = std::uniform_int_distribution<Elem>(0);  // default max is maximum value of type
+     } else {
+-        dist = std::uniform_int_distribution<Elem>(0, max-1); 
++        dist = std::uniform_int_distribution<Elem>(0, max-1);
+     }
+     const size_t len = mat.rows * mat.cols;
+     for (size_t i = 0; i < len; i++) {
+@@ -23,7 +23,7 @@ void randomInner64(Matrix64& mat, PRNG& prng, const Elem64 max) {
+     if (max == 0) {
+         dist = std::uniform_int_distribution<Elem64>(0);  // default max is maximum value of type
+     } else {
+-        dist = std::uniform_int_distribution<Elem64>(0, max-1); 
++        dist = std::uniform_int_distribution<Elem64>(0, max-1);
+     }
+     const size_t len = mat.rows * mat.cols;
+     for (size_t i = 0; i < len; i++) {
+@@ -32,7 +32,7 @@ void randomInner64(Matrix64& mat, PRNG& prng, const Elem64 max) {
+ }
+ 
+ void randomInner(BinaryMatrix& mat, PRNG& prng) {
+-    auto dist = std::uniform_int_distribution<>(0, 1); 
++    auto dist = std::uniform_int_distribution<>(0, 1);
+     const size_t len = mat.rows * mat.cols;
+     for (size_t i = 0; i < len; i++) {
+         mat.data[i] = dist(prng);
+@@ -89,7 +89,7 @@ void pseudorandom(BinaryMatrix& mat, const SeedType& seed) {
+ void error(Matrix& mat) {
+     const size_t len = mat.rows * mat.cols;
+     //auto error_norm = 0;
+-    Elem mid_pt = 1 << (sizeof(Elem)*8 - 1);
++    Elem mid_pt = Elem{1} << (sizeof(Elem)*8 - 1);
+     Elem magnitude;
+     for (size_t i = 0; i < len; i++) {
+         mat.data[i] = GaussSample<Elem>();
+@@ -108,7 +108,7 @@ void error(Matrix& mat) {
+ void error64(Matrix64& mat) {
+     const size_t len = mat.rows * mat.cols;
+     //auto error_norm = 0;
+-    Elem64 mid_pt = 1 << (sizeof(Elem64)*8 - 1);
++    Elem64 mid_pt = Elem64{1} << (sizeof(Elem64)*8 - 1);
+     Elem64 magnitude;
+     for (size_t i = 0; i < len; i++) {
+         mat.data[i] = GaussSample<Elem64>();
+@@ -140,7 +140,7 @@ bool eq(const Matrix& a, const Matrix& b, const bool verbose) {
+         if (verbose) {
+             std::cout << "Dimension mismatch!\n";
+             std::cout << a.rows << " x " << a.cols << " vs. " << b.rows << " x " << b.cols << std::endl;
+-        } 
++        }
+         return false;
+     }
+     size_t len = a.rows * b.cols;
+@@ -167,7 +167,7 @@ void print(const MatType& mat) {
+ }
+ 
+ template void print(const Matrix& mat);
+-template void print(const BinaryMatrix& mat); 
++template void print(const BinaryMatrix& mat);
+ 
+ void matAddInPlace(Matrix& a, const Matrix& b, const Elem modulus) {
+     const size_t rows = a.rows;
+@@ -321,7 +321,7 @@ Matrix matMulScalar(const Matrix& a, const Elem b, const Elem modulus) {
+         for (size_t i = 0; i < len; i++) {
+             out.data[i] = a.data[i] * b;
+             out.data[i] %= modulus;
+-        }   
++        }
+     }
+     return out;
+ }
+@@ -337,7 +337,7 @@ Matrix64 matMulScalar64(const Matrix64& a, const Elem64 b, const Elem64 modulus)
+         for (size_t i = 0; i < len; i++) {
+             out.data[i] = a.data[i] * b;
+             out.data[i] %= modulus;
+-        }   
++        }
+     }
+     return out;
+ }
+@@ -506,7 +506,7 @@ Matrix matMulAppendVec(const Matrix &a, const Matrix &b, const Matrix &c) {
+     if (aCols != b.rows) {
+         std::cout << "Dimension mismatch!\n";
+         std::cout << "trying to multiply ";
+-        std::cout << a.rows << " x " << a.cols << " times " << b.rows << " x " << b.cols << std::endl; 
++        std::cout << a.rows << " x " << a.cols << " times " << b.rows << " x " << b.cols << std::endl;
+         assert(false);
+     }
+ 
+@@ -515,9 +515,9 @@ Matrix matMulAppendVec(const Matrix &a, const Matrix &b, const Matrix &c) {
+     for (size_t i = 0; i < aRows; i++) {
+         for (size_t k = 0; k < aCols; k++) {
+             const Elem val = a.data[aCols * i + k];
+-            for (size_t j = 0; j < bCols; j++) 
++            for (size_t j = 0; j < bCols; j++)
+                 out.data[out.cols * i + j] += val * b.data[bCols * k + j];
+-            for (size_t j = 0; j < c.cols; j++) 
++            for (size_t j = 0; j < c.cols; j++)
+                 out.data[out.cols * i + bCols + j] += val * c.data[c.cols * k + j];
+         }
+     }
+@@ -540,10 +540,10 @@ Matrix binaryMatMulAppendVec(const BinaryMatrix &binary, const Matrix &b, const
+     for (size_t i = 0; i < aRows; i++) {
+         for (size_t k = 0; k < aCols; k++) {
+             if (binary.data[aCols * i + k]) {
+-                for (size_t j = 0; j < bCols; j++) 
++                for (size_t j = 0; j < bCols; j++)
+                     out.data[out.cols * i + j] += b.data[bCols * k + j];
+-                
+-                for (size_t j = 0; j < c.cols; j++) 
++
++                for (size_t j = 0; j < c.cols; j++)
+                     out.data[out.cols * i + bCols + j] += c.data[c.cols * k + j];
+             }
+         }
+@@ -891,4 +891,4 @@ Matrix RowVecMulBinaryMat(const Matrix& v, const BinaryMatrix& m) {
+         out.data[c] = tmp;
+     }
+     return out;
+-}
+\ No newline at end of file
++}
+diff --git a/verisimplepir/src/lib/pir/preproc_pir.cpp b/verisimplepir/src/lib/pir/preproc_pir.cpp
+index 8570bfe..00fd441 100644
+--- a/verisimplepir/src/lib/pir/preproc_pir.cpp
++++ b/verisimplepir/src/lib/pir/preproc_pir.cpp
+@@ -79,7 +79,7 @@ BinaryMatrix VeriSimplePIR::PreprocSampleCExplicitDim(uint32_t cols) const {
+     return C;
+ }
+ 
+-// Encrypts C with a fresh key. output is list of ciphertexts and secret keys pair  
++// Encrypts C with a fresh key. output is list of ciphertexts and secret keys pair
+ std::pair<std::vector<Multi_Limb_Matrix>, std::vector<Multi_Limb_Matrix>>
+ VeriSimplePIR::PreprocClientMessage(
+     const Multi_Limb_Matrix& A, const BinaryMatrix& C
+@@ -89,7 +89,7 @@ VeriSimplePIR::PreprocClientMessage(
+         assert(false);
+     }
+ 
+-    std::vector<Multi_Limb_Matrix> sks; 
++    std::vector<Multi_Limb_Matrix> sks;
+     sks.reserve(C.rows);
+     for (uint64_t i = 0; i < C.rows; i++)
+         sks.push_back(preproc_lhe.sampleSecretKey());
+@@ -119,7 +119,7 @@ VeriSimplePIR::PreprocClientMessageNew(
+         assert(false);
+     }
+ 
+-    std::vector<Matrix> sks; 
++    std::vector<Matrix> sks;
+     sks.reserve(C.rows);
+     for (uint64_t i = 0; i < C.rows; i++)
+         sks.push_back(lhe.sampleSecretKeyTernary());
+@@ -152,7 +152,7 @@ VeriSimplePIR::PreprocClientMessageNew64(
+         assert(false);
+     }
+ 
+-    std::vector<Matrix64> sks; 
++    std::vector<Matrix64> sks;
+     sks.reserve(C.rows);
+     for (uint64_t i = 0; i < C.rows; i++)
+         sks.push_back(lhe.sampleSecretKeyTernary64());
+@@ -178,7 +178,7 @@ VeriSimplePIR::PreprocClientMessageNew64(
+ 
+ std::pair<std::vector<Multi_Limb_Matrix>, std::vector<Multi_Limb_Matrix>>
+ VeriSimplePIR::PreprocFakeClientMessage() const {
+-    std::vector<Multi_Limb_Matrix> sks; 
++    std::vector<Multi_Limb_Matrix> sks;
+     sks.reserve(stat_sec_param);
+     for (uint64_t i = 0; i < stat_sec_param; i++)
+         sks.push_back(preproc_lhe.sampleSecretKey());
+@@ -187,8 +187,8 @@ VeriSimplePIR::PreprocFakeClientMessage() const {
+     // encrypt each row of C
+     for (uint64_t row_ind = 0; row_ind < sks.size(); row_ind++) {
+         Multi_Limb_Matrix ct(ell, 1);
+-        random_fast(ct.q_data); 
+-        random_fast(ct.kappa_data, preproc_lhe.kappa); 
++        random_fast(ct.q_data);
++        random_fast(ct.kappa_data, preproc_lhe.kappa);
+         result_cts.push_back(ct);
+     }
+ 
+@@ -199,7 +199,7 @@ VeriSimplePIR::PreprocFakeClientMessage() const {
+ 
+ // Just multiply input ciphertexts by D^T
+ std::vector<Multi_Limb_Matrix> VeriSimplePIR::PreprocAnswer(
+-    const std::vector<Multi_Limb_Matrix>& in_cts, 
++    const std::vector<Multi_Limb_Matrix>& in_cts,
+     const Matrix& D
+     // const PackedMatrix& D
+ ) const {
+@@ -208,7 +208,7 @@ std::vector<Multi_Limb_Matrix> VeriSimplePIR::PreprocAnswer(
+     //     assert(false);
+     // }
+ 
+-    std::vector<Multi_Limb_Matrix> result_cts; 
++    std::vector<Multi_Limb_Matrix> result_cts;
+     result_cts.reserve(in_cts.size());
+     for (uint64_t i = 0; i < in_cts.size(); i++)
+         result_cts.push_back(matMulVec(D, in_cts[i], preproc_lhe.kappa));
+@@ -218,7 +218,7 @@ std::vector<Multi_Limb_Matrix> VeriSimplePIR::PreprocAnswer(
+ }
+ 
+ std::vector<Matrix> VeriSimplePIR::PreprocAnswerNew(
+-    const std::vector<Matrix>& in_cts, 
++    const std::vector<Matrix>& in_cts,
+     const Matrix& D
+     // const PackedMatrix& D
+ ) const {
+@@ -227,7 +227,7 @@ std::vector<Matrix> VeriSimplePIR::PreprocAnswerNew(
+     //     assert(false);
+     // }
+ 
+-    std::vector<Matrix> result_cts; 
++    std::vector<Matrix> result_cts;
+     result_cts.reserve(in_cts.size());
+     for (uint64_t i = 0; i < in_cts.size(); i++)
+         result_cts.push_back(matMulVec(D, in_cts[i]));
+@@ -239,10 +239,10 @@ std::vector<Matrix> VeriSimplePIR::PreprocAnswerNew(
+ // takes in one row of D^T and multiplies it m times
+ // used when database is too big for benchmarking machine
+ std::vector<Multi_Limb_Matrix> VeriSimplePIR::PreprocFakeComputeAnswer(
+-    const std::vector<Multi_Limb_Matrix>& in_cts, 
++    const std::vector<Multi_Limb_Matrix>& in_cts,
+     const Matrix& D
+ ) const {
+-    std::vector<Multi_Limb_Matrix> result_cts; 
++    std::vector<Multi_Limb_Matrix> result_cts;
+     result_cts.reserve(in_cts.size());
+     for (uint64_t i = 0; i < in_cts.size(); i++) {
+         Multi_Limb_Matrix ct_elem(1, 1);
+@@ -263,12 +263,12 @@ std::vector<Multi_Limb_Matrix> VeriSimplePIR::PreprocFakeComputeAnswer(
+ 
+ 
+ std::vector<Multi_Limb_Matrix> VeriSimplePIR::PreprocFakeAnswer() const {
+-    std::vector<Multi_Limb_Matrix> result_cts; 
++    std::vector<Multi_Limb_Matrix> result_cts;
+     result_cts.reserve(stat_sec_param);
+     for (uint64_t i = 0; i < stat_sec_param; i++) {
+         Multi_Limb_Matrix ct(m, 1);
+-        random_fast(ct.q_data); 
+-        random_fast(ct.kappa_data, preproc_lhe.kappa); 
++        random_fast(ct.q_data);
++        random_fast(ct.kappa_data, preproc_lhe.kappa);
+         result_cts.push_back(ct);
+     }
+     return result_cts;
+@@ -284,10 +284,10 @@ void VeriSimplePIR::HashAandH(unsigned char * hash, const Multi_Limb_Matrix& A,
+     SHA256_Final(hash, &sha256);
+ }
+ 
+-// This is the C used to prove the correctness of the preprocessed computation. 
++// This is the C used to prove the correctness of the preprocessed computation.
+ // The dimension is lambda x m
+ BinaryMatrix VeriSimplePIR::BatchHashToC(const unsigned char * AandHhash, const std::vector<Multi_Limb_Matrix>& u_vec, const std::vector<Multi_Limb_Matrix>& v_vec) const {
+-    
++
+     assert(u_vec.size() == v_vec.size());
+ 
+     unsigned char hash[SHA256_DIGEST_LENGTH];
+@@ -303,7 +303,7 @@ BinaryMatrix VeriSimplePIR::BatchHashToC(const unsigned char * AandHhash, const
+     SHA256_Final(hash, &sha256);
+ 
+     SeedType seed = osuCrypto::toBlock(hash) ^ osuCrypto::toBlock(hash + 16);
+-    // memcpy((unsigned char *)seed, hash, sizeof(seed)); 
++    // memcpy((unsigned char *)seed, hash, sizeof(seed));
+     // std::cout << "Dummy C seed!\n";
+     BinaryMatrix C(stat_sec_param, m);
+     pseudorandom(C, seed);
+@@ -313,7 +313,7 @@ BinaryMatrix VeriSimplePIR::BatchHashToC(const unsigned char * AandHhash, const
+ // Prove that the computation in PreprocAnswer was correct.
+ Matrix VeriSimplePIR::PreprocProve(
+     const unsigned char * hash,
+-    const std::vector<Multi_Limb_Matrix>& u, const std::vector<Multi_Limb_Matrix>& v, 
++    const std::vector<Multi_Limb_Matrix>& u, const std::vector<Multi_Limb_Matrix>& v,
+     // const PackedMatrix& D
+     const Matrix& D
+ ) const {
+@@ -331,9 +331,9 @@ Matrix VeriSimplePIR::PreprocFakeProve() const {
+ 
+ // Verifies preprocessed Z
+ void VeriSimplePIR::PreprocVerify(
+-    const Multi_Limb_Matrix& A, const Multi_Limb_Matrix& H, 
++    const Multi_Limb_Matrix& A, const Multi_Limb_Matrix& H,
+     const unsigned char * hash,
+-    const std::vector<Multi_Limb_Matrix>& u, const std::vector<Multi_Limb_Matrix>& v, 
++    const std::vector<Multi_Limb_Matrix>& u, const std::vector<Multi_Limb_Matrix>& v,
+     const Matrix& Z, const bool fake
+ ) const {
+     const size_t norm_bound = lhe.p*m;  // D^T rows have length m
+@@ -348,7 +348,7 @@ void VeriSimplePIR::PreprocVerify(
+     }
+ 
+     BinaryMatrix C = BatchHashToC(hash, u, v);
+-    
++
+     Multi_Limb_Matrix leftMatFixed = matMul(Z, A, preproc_lhe.kappa);
+     Multi_Limb_Matrix rightMatFixed = matMulLeftBinary(C, H, preproc_lhe.kappa);
+     if (!eq(leftMatFixed, rightMatFixed, !fake)) {
+@@ -384,7 +384,7 @@ Matrix VeriSimplePIR::PreprocRecoverZ(
+     for (uint64_t row_ind = 0; row_ind < res_ct.size(); row_ind++) {
+         Matrix Z_row = preproc_lhe.decrypt(H_2, sks[row_ind], res_ct[row_ind]);
+         assert(Z_row.rows == m); assert(Z_row.cols == 1);
+-        
++
+         for (uint64_t col_ind = 0; col_ind < m; col_ind++)
+             Z.data[row_ind*m + col_ind] = Z_row.data[col_ind];
+     }
+@@ -408,7 +408,7 @@ Matrix VeriSimplePIR::PreprocRecoverZNew(
+         //Matrix Z_row = lhe.decrypt(H_2, sks[row_ind], res_ct[row_ind], true);
+         Matrix Z_row = lhe.decrypt_preproc(H_2, sks[row_ind], res_ct[row_ind], blowup, true);
+         assert(Z_row.rows == m); assert(Z_row.cols == 1);
+-        
++
+         for (uint64_t col_ind = 0; col_ind < m; col_ind++)
+             Z.data[row_ind*m + col_ind] = Z_row.data[col_ind];
+     }
+@@ -432,7 +432,7 @@ Matrix VeriSimplePIR::PreprocRecoverZNew64(
+         //Matrix Z_row = lhe.decrypt(H_2, sks[row_ind], res_ct[row_ind], true);
+         Matrix Z_row = lhe.decrypt_preproc64(H_2, sks[row_ind], res_ct[row_ind], blowup, true);
+         assert(Z_row.rows == m); assert(Z_row.cols == 1);
+-        
++
+         for (uint64_t col_ind = 0; col_ind < m; col_ind++)
+             Z.data[row_ind*m + col_ind] = Z_row.data[col_ind];
+     }
+@@ -446,9 +446,9 @@ void VeriSimplePIR::VerifyPreprocZ(
+     const bool fake
+ ) const {
+     // Verify Z against A_1 and H_1
+-    // std::cout << "Z = "; print(Z); 
++    // std::cout << "Z = "; print(Z);
+ 
+-    const size_t norm_bound = lhe.p*ell; 
++    const size_t norm_bound = lhe.p*ell;
+     const size_t Z_len = Z.rows * Z.cols;
+     for (size_t i = 0; i < Z_len; i++) {
+         if (Z.data[i] >= norm_bound && !fake) {
+@@ -489,13 +489,27 @@ void VeriSimplePIR::VerifyPreprocZCompressed(
+     }
+ }
+ 
++void VeriSimplePIR::VerifyPreprocZCompressedGivenLeftProduct(
++    const Matrix& RZA, const Matrix& RC, const Matrix& H_1,
++    const bool fake
++) const {
++    Matrix rightMat = matMul(RC, H_1);
++    if (!eq(RZA, rightMat) && !fake) {
++        std::cout << "\n\nERROR: \n Primary plaintext verify mismatch!\n\n";
++        assert(false);
++    }
++    else {
++        std::cout << "Primary verify success\n";
++    }
++}
++
+ void VeriSimplePIR::VerifyPreprocZSecondary(
+     const Matrix& Z,
+     const Matrix& A_1, const BinaryMatrix& C, const Matrix& H_1,
+     const bool fake
+-) const { 
++) const {
+ 
+-    const size_t norm_bound = lhe.p*ell; 
++    const size_t norm_bound = lhe.p*ell;
+     const size_t Z_len = Z.rows * Z.cols;
+     for (size_t i = 0; i < Z_len; i++) {
+         if (Z.data[i] >= norm_bound && !fake) {
+@@ -519,7 +533,7 @@ void VeriSimplePIR::VerifyPreprocZSecondaryCompressed(
+     const Matrix& RZ,
+     const Matrix& A_1, const Matrix& RC, const Matrix& H_1,
+     const bool fake
+-) const { 
++) const {
+ 
+     Matrix leftMat = matMulSecondary(RZ, A_1);
+     Matrix rightMat = matMulSecondary(RC, H_1);
+@@ -777,7 +791,7 @@ entry_t VeriSimplePIR::Recover(const Matrix& hint, const Matrix& ciphertext, con
+         std::cout << "index row is too big!\n";
+         assert(false);
+     }
+-  
++
+     Matrix pt = lhe.decrypt(hint, secretKey, ciphertext);
+     std::cout << "Recover pt =\n"; print(pt);
+     return dbParams.recover(&pt.data[index_row], index);
+@@ -791,7 +805,7 @@ entry_t VeriSimplePIR::RecoverPNNS(const Matrix& hint, const Matrix& ciphertext,
+         std::cout << "index row is too big!\n";
+         assert(false);
+     }
+-  
++
+     Matrix pt = lhe.decrypt(hint, secretKey, ciphertext);
+     //std::cout << "Recover pt =\n"; print(pt);
+     return dbParams.recover(&pt.data[index_row], index);
+@@ -801,4 +815,4 @@ Matrix VeriSimplePIR::RecoverPNNSScores(const Matrix& hint, const Matrix& cipher
+     Matrix pt = lhe.decrypt(hint, secretKey, ciphertext);
+     //std::cout << "Recover pt =\n"; print(pt);
+     return pt;
+-}
+\ No newline at end of file
++}
+diff --git a/verisimplepir/src/lib/pir/preproc_pir.h b/verisimplepir/src/lib/pir/preproc_pir.h
+index ebeb1e3..79fa763 100644
+--- a/verisimplepir/src/lib/pir/preproc_pir.h
++++ b/verisimplepir/src/lib/pir/preproc_pir.h
+@@ -10,7 +10,7 @@ class VeriSimplePIR {
+ public:
+ 
+     static constexpr uint64_t stat_sec_param = STAT_SEC_PARAM;
+-    
++
+     uint64_t N, d;  // database has N entries of length d
+     Database db;
+     PlaintextDBParams dbParams;
+@@ -23,9 +23,9 @@ public:
+     // SHA256_CTX sha256;  // Fiat Shamir hash
+ 
+     VeriSimplePIR(const uint64_t N_in, const uint64_t d_in,
+-        const bool allowTrivial = true, const bool verbose = false, 
++        const bool allowTrivial = true, const bool verbose = false,
+         const bool simplePIR = false,
+-        const bool randomData = true, 
++        const bool randomData = true,
+         const uint64_t batchSize = 1,
+         const bool preproc = false,
+         const bool honestHint = false
+@@ -43,7 +43,7 @@ public:
+         Elem kappa = (Elem)std::ceil(std::sqrt(m * ell));
+         if (kappa % 2 == 0) kappa += 1;
+ 
+-        // std::cout << "ell, m, kappa: " << ell << " " << m << " " << kappa << std::endl; 
++        // std::cout << "ell, m, kappa: " << ell << " " << m << " " << kappa << std::endl;
+ 
+         preproc_lhe = Multi_Limb_LHE(dbParams.p*ell, kappa);
+ 
+@@ -56,9 +56,9 @@ public:
+     };
+ 
+         VeriSimplePIR(const uint64_t row_in, const uint64_t col_in, const uint64_t lattice_n_in, const uint64_t d_in, const uint64_t logp_in,
+-        const bool allowTrivial = true, const bool verbose = false, 
++        const bool allowTrivial = true, const bool verbose = false,
+         const bool simplePIR = false,
+-        const bool randomData = true, 
++        const bool randomData = true,
+         const uint64_t batchSize = 1,
+         const bool preproc = false,
+         const bool honestHint = false
+@@ -83,7 +83,7 @@ public:
+         // TODO: remove this; just quickly checking if small kappa leads to incorrect decryption of Z when \ell, m is small
+         //kappa = 17;
+ 
+-        //std::cout << "ell, m, kappa: " << ell << " " << m << " " << kappa << std::endl; 
++        //std::cout << "ell, m, kappa: " << ell << " " << m << " " << kappa << std::endl;
+ 
+         //preproc_lhe = Multi_Limb_LHE(dbParams.p*ell, kappa);
+ 
+@@ -136,8 +136,8 @@ public:
+     // samples the plaintext C to be encrypted
+     BinaryMatrix PreprocSampleCExplicitDim(uint32_t cols) const;
+ 
+-    // Encrypts C with a fresh key. output is list of ciphertexts and secret keys pair  
+-    std::pair<std::vector<Multi_Limb_Matrix>, std::vector<Multi_Limb_Matrix>> 
++    // Encrypts C with a fresh key. output is list of ciphertexts and secret keys pair
++    std::pair<std::vector<Multi_Limb_Matrix>, std::vector<Multi_Limb_Matrix>>
+     PreprocClientMessage(const Multi_Limb_Matrix& A, const BinaryMatrix& C) const;
+ 
+     std::pair<std::vector<Matrix>, std::vector<Matrix>>
+@@ -154,19 +154,19 @@ public:
+     PreprocFakeClientMessage() const;
+ 
+     std::vector<Multi_Limb_Matrix> PreprocAnswer(
+-        const std::vector<Multi_Limb_Matrix>& ciphertext, 
++        const std::vector<Multi_Limb_Matrix>& ciphertext,
+         // const PackedMatrix& D
+         const Matrix& D
+     ) const;
+ 
+     std::vector<Matrix> PreprocAnswerNew(
+-    const std::vector<Matrix>& in_cts, 
++    const std::vector<Matrix>& in_cts,
+     const Matrix& D
+     // const PackedMatrix& D
+     ) const;
+ 
+     std::vector<Multi_Limb_Matrix> PreprocFakeComputeAnswer(
+-        const std::vector<Multi_Limb_Matrix>& in_cts, 
++        const std::vector<Multi_Limb_Matrix>& in_cts,
+         const Matrix& D
+     ) const;
+ 
+@@ -181,7 +181,7 @@ public:
+     // Prove that the computation in PreprocAnswer was correct.
+     Matrix PreprocProve(
+         const unsigned char * hash,
+-        const std::vector<Multi_Limb_Matrix>& u, const std::vector<Multi_Limb_Matrix>& v, 
++        const std::vector<Multi_Limb_Matrix>& u, const std::vector<Multi_Limb_Matrix>& v,
+         // const PackedMatrix& D
+         const Matrix& D
+     ) const;
+@@ -190,9 +190,9 @@ public:
+ 
+     // Verifies preprocessed Z
+     void PreprocVerify(
+-        const Multi_Limb_Matrix& A, const Multi_Limb_Matrix& H, 
++        const Multi_Limb_Matrix& A, const Multi_Limb_Matrix& H,
+         const unsigned char * hash,
+-        const std::vector<Multi_Limb_Matrix>& u, const std::vector<Multi_Limb_Matrix>& v, 
++        const std::vector<Multi_Limb_Matrix>& u, const std::vector<Multi_Limb_Matrix>& v,
+         const Matrix& Z, const bool fake = false) const;
+ 
+     // Decrypts result Z
+@@ -214,6 +214,13 @@ public:
+         const bool fake = false
+     ) const;
+ 
++    // Same verification relation as VerifyPreprocZCompressed, with RZ*A
++    // supplied by a replaceable public-pad backend.
++    void VerifyPreprocZCompressedGivenLeftProduct(
++        const Matrix& RZA, const Matrix& RC, const Matrix& H_1,
++        const bool fake = false
++    ) const;
++
+     void VerifyPreprocZSecondary(
+         const Matrix& Z,
+         const Matrix& A_1, const BinaryMatrix& C, const Matrix& H_1,
+@@ -247,18 +254,18 @@ public:
+     Matrix Init() const;  // Sample public parameters
+     Matrix EmptyA() const;
+     Matrix FakeInit() const;
+-    
++
+     Matrix GenerateHint(const Matrix& A, const Matrix& D, bool solinas = false, int record_bitsize = 0) const;
+     Matrix GenerateFakeHint() const;
+ 
+-    std::pair<Matrix, Matrix> Query(const Matrix& A, const uint64_t index) const;  
+-    // batch query. output is still ciphertext and secret key pair  
++    std::pair<Matrix, Matrix> Query(const Matrix& A, const uint64_t index) const;
++    // batch query. output is still ciphertext and secret key pair
+     // std::pair<Matrix, Matrix> Query(const Matrix& A, const std::vector<uint64_t> indices) const;
+     Matrix QueryGivenLweSk(const Matrix& A, const uint64_t index, const Matrix& secretKey_in) const;
+     Matrix QueryGivenLweSkPNNS(const Matrix& A, const uint64_t index, const Matrix& secretKey_in) const;
+ 
+     std::pair<Matrix, Matrix> RandomPNNSQueryGivenLweSk(const Matrix& A, const Matrix& secretKey_in) const;
+-    
++
+     Matrix Answer(const Matrix& ciphertext, const Matrix& D) const;
+     Matrix Answer(const Matrix& ciphertext, const PackedMatrix& D_packed) const;
+ 
+@@ -277,14 +284,13 @@ public:
+     std::pair<BinaryMatrix, Matrix> SampleFakeCandZ() const;
+ 
+     entry_t Recover(
+-        const Matrix& hint, const Matrix& ciphertext, 
++        const Matrix& hint, const Matrix& ciphertext,
+         const Matrix& secretKey, const uint64_t index) const;
+ 
+     entry_t RecoverPNNS(
+-        const Matrix& hint, const Matrix& ciphertext, 
++        const Matrix& hint, const Matrix& ciphertext,
+         const Matrix& secretKey, const uint64_t index) const;
+ 
+     Matrix RecoverPNNSScores(const Matrix& hint, const Matrix& ciphertext, const Matrix& secretKey) const;
+ };
+ 
+-

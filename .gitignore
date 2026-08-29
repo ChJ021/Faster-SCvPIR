@@ -2,6 +2,7 @@
 .uv-cache/
 __pycache__/
 *.py[cod]
+*.swp
 .pytest_cache/
 .mypy_cache/
 build/
@@ -10,3 +11,7 @@ benchmark-results/
 native/vendor/
 native/build/
 native/cache/
+native/logs/
+PIR_relatedworks/
+native/results/512mib/
+native/results/1gib/
