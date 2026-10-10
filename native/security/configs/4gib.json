@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "name": "paper-4gib",
+  "profiles": ["baseline", "ypir-main", "distpir-offline", "hybrid"],
+  "database": {
+    "rows": 65536,
+    "columns": 65536,
+    "record_bits": 8,
+    "stack_cells": 1,
+    "logical_bytes": 4294967296
+  },
+  "parameters": {
+    "q_main": 4278255617,
+    "q_offline": 18014398492704769,
+    "plaintext_modulus": 256,
+    "main_error_variance": 8,
+    "offline_error_stddev": 6.4,
+    "fhe": {
+      "ring_degree": 4096,
+      "moduli": [19988226643746817, 19988226643402753],
+      "plaintext_modulus": 4278255617,
+      "gadget_log_bases": [13, 14],
+      "error_variance": 8
+    }
+  },
+  "targets": {
+    "computational_bits": 128,
+    "correctness_bits": 40,
+    "statistical_bits": 40,
+    "deployment_targets": 1
+  },
+  "current": {
+    "main_lwe_dimension": 1408,
+    "offline_lwe_dimension": 2816,
+    "main_ring_degree": 2048,
+    "offline_ring_degree": 4096
+  },
+  "candidates": {
+    "main_lwe_dimensions": {"start": 1024, "stop": 2048, "step": 64},
+    "offline_lwe_dimensions": {"start": 2048, "stop": 4096, "step": 64},
+    "main_ring_degrees": [1024, 2048],
+    "offline_ring_degrees": [1024, 2048, 4096]
+  },
+  "runtime_supported": {
+    "main_lwe_dimensions": {"start": 1024, "stop": 2048, "step": 64},
+    "offline_lwe_dimensions": {"start": 2048, "stop": 4096, "step": 64},
+    "main_ring_degrees": [2048],
+    "offline_ring_degrees": [2048, 4096]
+  },
+  "estimator_timeout_seconds": 3600,
+  "estimator_parallel_jobs": 12,
+  "fhe_attack_profile": "decisive-usvp"
+}
