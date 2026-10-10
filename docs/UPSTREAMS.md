@@ -10,7 +10,7 @@
 - 组合许可：`verisimplepir/` 原始部分 MIT；`hintless_simplepir/`、`linpir/`、`lwe/` 原始部分 Apache-2.0；集成必须保留全部 notice 和文件头。
 - 上游固定的更早基础：HintlessPIR `4be2ae8`、VeriSimplePIR `3643bb7`。
 
-计划中的 vendoring 规则：
+当前 vendoring 规则：
 
 1. vendor 原文件不直接修改；
 2. tarball、commit、SHA-256 和许可证一并固定；
@@ -29,8 +29,8 @@ bazel run -c opt --cxxopt='-std=c++17' \
 
 仓库只有一个完整 `cc_test`，没有独立 benchmark target、客户端/服务器 binary 或传输层。Dockerfile 固定 amd64，并保留 AES/SSE4 编译选项；当前源码默认测试约 2 MiB，而非 README 展示的 512 MiB，打印的 benchmark 也不含真实网络时间。第一阶段必须记录 CPU/编译特性并只做复现，不把结果标为 general-`H`。
 
-## VIA 对照上游
+## 已归档的 VIA 对照上游
 
 - 论文：[VIA, ePrint 2025/2074](https://eprint.iacr.org/2025/2074)。
-- 角色：Phase 7 比较后端，不进入 SC-vPIR-G1 安全证明。
-- 固定提交、许可和可复现构建：待原生接入时补充；在此之前 benchmark 状态保持 `not-integrated`。
+- 角色：历史比较候选，不进入当前 paper-v1 实验或安全主张。
+- 适配器与说明已迁入 `legacy/via-comparator/`；若未来恢复，必须先完成原生接入、参数匹配和同机复现。

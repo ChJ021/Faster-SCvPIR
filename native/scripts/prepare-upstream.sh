@@ -9,7 +9,6 @@ readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 source "$SCRIPT_DIR/lib/common.sh"
 
 readonly SOURCE_PATCH="$PIR_NATIVE_ROOT/patches/ypir-ntt-preprocessing.patch"
-readonly SOURCE_PATCH_SHA256="3af8621d1c5ec67ee2e2b50946dcd91be821848255f2cd935001e2ffd87ab657"
 
 pir_require_command git
 pir_require_command sha256sum
@@ -18,8 +17,8 @@ pir_require_command unzip
 [[ -f "$SOURCE_PATCH" ]] || pir_die "source patch is missing: $SOURCE_PATCH"
 actual_patch_sha256="$(sha256sum "$SOURCE_PATCH")"
 actual_patch_sha256="${actual_patch_sha256%% *}"
-[[ "$actual_patch_sha256" == "$SOURCE_PATCH_SHA256" ]] \
-  || pir_die "source patch checksum mismatch: expected $SOURCE_PATCH_SHA256, got $actual_patch_sha256"
+[[ "$actual_patch_sha256" == "$PIR_SOURCE_PATCH_SHA256" ]] \
+  || pir_die "source patch checksum mismatch: expected $PIR_SOURCE_PATCH_SHA256, got $actual_patch_sha256"
 
 mkdir -p "$PIR_NATIVE_ROOT/vendor"
 if [[ ! -d "$PIR_UPSTREAM_DIR/.git" ]]; then
@@ -58,7 +57,7 @@ if [[ ! -f "$PIR_EIGEN_DIR/BUILD.bazel" || ! -f "$PIR_EIGEN_DIR/WORKSPACE.bazel"
 fi
 
 printf 'upstream_commit=%s\n' "$actual_commit"
-printf 'source_patch_sha256=%s\n' "$SOURCE_PATCH_SHA256"
+printf 'source_patch_sha256=%s\n' "$PIR_SOURCE_PATCH_SHA256"
 printf 'source_patch_state=%s\n' "$patch_state"
 printf 'eigen_sha256=%s\n' "$PIR_EIGEN_SHA256"
 printf 'status=ready\n'

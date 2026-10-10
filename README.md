@@ -1,91 +1,218 @@
-# Small-client vPIR 工程化第一版
+# Faster-SCvPIR
 
-本项目已从“VIA + 通用恶意编译器”的研究型组合，切换为 **Rathee–Lee–Popa 的 Small-client vPIR** 工程实例化。目标是降低密码学创新风险，优先得到可复现、可审计、可逐步替换为原生 C++ 密码后端的实现。
+Structured preprocessing acceleration for Small-Client verifiable PIR (SCvPIR),
+with a conditional security analysis.
 
-第一版现采用以下模型：单服务器、静态数据库、状态型客户端、恶意服务器、查询隐私与响应一致性、检测后中止，以及 **honest-H** 前提。`H = D A` 必须由可信发布者/可信预处理方生成并通过可信渠道交付，或由可信发布者签名背书。当前 PoC 把生成、分发和验签视为协议外前提；它不提供 freshness、rollback 防护或可用性保证。
+This repository contains the native C++ integration, frozen experiment
+parameters, four-profile benchmark harness, and security-assessment scripts.
+It builds on [Verifiable PIR with Small Client Storage](https://eprint.iacr.org/2025/1714)
+and the authors' [Verifiable-Hintless-PIR implementation](https://github.com/mayank0403/Verifiable-Hintless-PIR).
+The upstream source is reconstructed from a pinned commit and a checked patch.
 
-因此第一版恢复论文实现使用的 honest-H 参数路线，并停止 general-H 原生改造。活动 SIS 界为
+## What changes
 
-```text
-beta_honest = B + ell * ||D||_infinity
-```
+Stacked negacyclic matrices and exact number-theoretic transforms (NTTs) are
+used consistently in five pad-dependent products:
 
-这不等于已经完成生产安全证书；LWE、RLWE、SIS 参数和可信 `H` 来源仍需在部署时独立审计。
+- Main hint generation: `H = D A`.
+- Query preparation: `A s`.
+- Registration verification: `Z' A`.
+- Offline hint generation: `H_2 = D^T A_2`.
+- Offline challenge encryption: `A_2 s_j`.
 
-## 当前交付
+The subsequent linear checks retain their form. The selected structured
+parameters change the secret dimensions and hint sizes; the retrieval scan
+`D u` remains unchanged.
 
-- [`native/`](native/)：当前活动实现；作者 honest-H C++ PoC、512 MiB 配置、构建脚本与可信 `H` 边界。
-- [`docs/VIA_COMPARISON.md`](docs/VIA_COMPARISON.md)：VIA 的后期对比方法与统一指标。
-- [`small_client_vpir/`](small_client_vpir/) 与 [`tests/`](tests/)：此前构建的透明代数测试工具；保留用于回归等式和状态机，但不再定义活动参数或安全模型。
-- [`comparators/via/`](comparators/via/)：VIA 比较适配器占位，不参与第一版安全主线。
+| Profile | Main pad | Offline pad |
+|---|---|---|
+| `dense` | Dense | Dense |
+| `negacyclic-main` | Negacyclic / exact NTT | Dense |
+| `negacyclic-offline` | Dense | Negacyclic / exact NTT |
+| `negacyclic-both` | Negacyclic / exact NTT | Negacyclic / exact NTT |
 
-Python 模型使用透明“FHE”，密文中直接含明文；它只验证算法维度、等式、状态转换和拒绝路径，**不提供 PIR 隐私、FHE 安全或生产级恶意安全**。当前活动实现以作者 C++/HintlessPIR/Google SHELL encryption 路径为准。
+## Scope and reported results
 
-## 可选：使用 uv 运行代数回归测试
+The evaluated configuration assumes **honestly generated hints**, with any
+external authentication outside this proof of concept. It is a single-process,
+static-database experiment; it does not provide a network service.
 
-所有 Python 命令都通过 `uv` 创建的仓库内 `.venv` 执行：
+The manuscript reports five database layouts from 256 MiB to 4 GiB, four
+profiles, and five repetitions per layout/profile on the same host
+(Intel Core i7-10700, 64 GB RAM, Ubuntu 22.04.5, single-threaded execution).
+
+| Metric | Reported Dense-to-structured comparison |
+|---|---|
+| Total preprocessing, including one client registration | 6.69–14.17× speedup |
+| Combined query preparation and retrieval computation | 3.91–7.08× speedup |
+| Compressed-proof payload | Unchanged |
+| Combined server hints, `H + H_2` | 45.5% larger |
+
+These are computation measurements excluding network transmission. Retrieval
+alone is essentially unchanged; the query-path benefit comes from preparation.
+The compressed-proof payload is only one part of client storage.
+
+The analysis establishes algebraic identities and a bounded Ring-SIS binding
+relation, then adapts SCvPIR's simulation under explicit assumptions. In
+particular, hidden-challenge transfer (H), delegation feedback (F), and the
+extraction budget remain conditions. The evaluated parameters do not instantiate
+the arbitrary-malicious-hint theorem. Lattice-estimator outputs assess the
+declared attack-cost model; they do not prove these protocol requirements.
+See [the security-model notes](native/security/MODEL_README.md).
+
+## Get the repository
 
 ```bash
-make venv
+git clone https://github.com/ChJ021/Faster-SCvPIR.git
+cd Faster-SCvPIR
+```
+
+All commands below run from the repository root.
+
+### Prerequisites
+
+- Linux x86-64; the recorded performance environment is Ubuntu 22.04.5.
+- Python 3.10 or newer, GNU Make, Bash, Git, and standard Linux utilities.
+- For native builds: Clang with C++17 support, unzip, pkg-config, and the
+  upstream system dependencies, including OpenSSL and GSL development headers.
+  The pinned upstream Dockerfile lists its build dependencies.
+- Bazel 6.5.0 and the pinned Eigen archive are included under
+  `native/tools/` and `native/toolchain/sources/`.
+- SageMath **9.5** is required for lattice-estimator runs, but not for the
+  Python unit tests.
+- Network access is needed to fetch the pinned upstream, Bazel dependencies,
+  and estimator snapshots on first use.
+
+### Lightweight validation
+
+These checks do not run the full performance experiment:
+
+```bash
+export PYTHONDONTWRITEBYTECODE=1
 make check
-make demo
-make benchmark
-make benchmark-via
+python3 -m unittest discover -s native/security -p test_model_audit.py -v
+make paper-dry-run
 ```
 
-其中 `make benchmark` 只运行 `experimental-split-qlp-reference` 代数路径，用于检查分阶段指标字段；它不是 Figure 5 合并安全基线，也不能用于安全或性能结论。`make demo` 才演示 `figure5-combined` 控制流。
+The dry run resolves all 20 layout/profile combinations and writes a schedule
+under the ignored `native/logs/` directory.
 
-等价的直接命令：
-
-```bash
-uv --cache-dir .uv-cache --offline venv --allow-existing --python 3.12 .venv
-uv --cache-dir .uv-cache --offline run --python .venv/bin/python python -m unittest discover -s tests -v
-uv --cache-dir .uv-cache --offline run --python .venv/bin/python python -m small_client_vpir demo
-uv --cache-dir .uv-cache --offline run --python .venv/bin/python python -m small_client_vpir benchmark --protocol small-client
-```
-
-## 原生作者 PoC 复现
-
-作者的 C++ honest-H 基线已经完成 512 MiB 端到端运行，并在回退 general-H 后重新
-编译成功。工具、Bazel
-输出、第三方源码缓存与日志都放在 `native/`；只有 Clang、OpenSSL/GSL 开发库和 GDB
-等基础系统包由 apt 安装。复现入口为：
+### Prepare and verify the native source
 
 ```bash
 native/scripts/prepare-upstream.sh
-native/scripts/build-run-paper-512mib.sh --preproc-profile=baseline
-native/scripts/build-run-paper-512mib.sh --preproc-profile=ypir-main
-native/scripts/build-run-paper-512mib.sh --preproc-profile=distpir-offline
-native/scripts/build-run-paper-512mib.sh --preproc-profile=hybrid
+make native-verify
 ```
 
-`prepare-upstream.sh` 会检出固定的作者提交，并自动应用仓库中的
-`native/patches/ypir-ntt-preprocessing.patch`。该补丁包含主 Hint 与离线
-`H_2=D^T A_2` 的精确负循环 NTT 实现，因此 GitHub 仓库不需要收录完整的第三方源码树、
-Bazel 缓存或本机虚拟环境。
+Preparation checks the source-patch hash, checks out upstream commit
+`56b8b744276aa3f3c078509501200967d28cfc7b`, applies the patch, and unpacks
+the pinned Eigen archive. Verification checks the source state and toolchain.
 
-1 GiB 实验使用 `native/scripts/build-run-paper-1gib.sh`，参数形式与 512 MiB
-入口相同。两套脚本也支持 `--prepare-only` 和 `--build-only`。
+### Build and run
 
-历史 smoke 记录及其 SHA-256 见
-[`native/manifests/smoke-result-20260824.json`](native/manifests/smoke-result-20260824.json)，
-具体构建边界见 [`native/README.md`](native/README.md)。该记录早于 32 位满位宽采样与
-Eigen 行写入修复，只能作为旧流程的功能/来源记录，不能作为修复后的安全或性能结果。
-当前实现仍是论文作者的 honest-H、单进程学术 PoC；不是 general-H 或网络服务。
+```bash
+make paper-build SIZE=1gib PROFILE=dense
+make paper-run SIZE=1gib PROFILE=negacyclic-both
+```
 
-## 为什么第一版不用 VIA 或 Verifiable BALANCED-PIR
+The shared binary accepts all frozen layouts at runtime. For a small
+non-paper diagnostic run, use the paper runner's 4 MiB smoke profile:
 
-- Small-client vPIR 已有专用 vLHE/vPIR 定理、作者 C++ PoC、证明压缩和查询级预处理；采用 honest-H 后可直接复用作者已实现的 32 位参数路径，密码学创新风险最低。
-- VIA 本身只证明半诚实查询隐私与诚实正确性。要达到同一恶意模型，还需新的通用编译层、LDC、proximity test、承诺和 keyword-PIR 适配，组合与常数风险更高。
-- Verifiable BALANCED-PIR 已直接提供可验证 stateful PIR，但周期性全库离线阶段、失败后的时序处理和小记录布局更强地限制部署；它不是当前“先复用现成 C++ 密码路径”的最低风险选项。
+```bash
+make paper-run SIZE=smoke PROFILE=negacyclic-both
+```
 
-VIA 仍被保留为第二阶段性能对照。只有在两个原生实现使用同一机器、数据库布局、记录大小、安全等级和统计口径时，才比较哪一个更优。
+This differs from the original upstream's 2 MiB default used by
+`make native-smoke`.
 
-## 主要依据
+| Paper layout | Minimum available memory | Recommended available memory |
+|---|---:|---:|
+| 256 MiB | 8 GiB | 12 GiB |
+| 512 MiB | 12 GiB | 16 GiB |
+| 1 GiB | 20 GiB | 32 GiB |
+| 2 GiB | 32 GiB | 40 GiB |
+| 4 GiB | 52 GiB | 60 GiB |
 
-- Rathee, Lee, Popa, *Verifiable PIR with Small Client Storage*, IEEE S&P 2026 / [IACR ePrint 2025/1714](https://eprint.iacr.org/2025/1714)。
-- 作者实现：[Verifiable-Hintless-PIR](https://github.com/mayank0403/Verifiable-Hintless-PIR)，本项目计划固定提交 `56b8b744276aa3f3c078509501200967d28cfc7b`。
-- VIA：[IACR ePrint 2025/2074](https://eprint.iacr.org/2025/2074)，仅作为后期对照。
+### Run the full experiment matrix
 
-本地研究 PDF 和用户原始课题材料不随 GitHub 工程仓库发布；LaTeX 主稿、旧 MVIA
-原型和论文专用脚本已从工程入口移除。
+```bash
+make paper-matrix REPETITIONS=5 ORDER_SEED=20260909 CPU_SET=2
+```
+
+This schedules 100 runs with balanced profile ordering and a common query
+index within each layout/repetition. Select a logical CPU available on your
+machine. Formal runs enforce CPU affinity, memory gates, and the performance
+governor policy; the scripts do not change host settings.
+
+To aggregate a completed session, replace `matrix-...` with the session ID
+printed by the scheduler:
+
+```bash
+make paper-summarize SESSION_ID=matrix-...
+```
+
+The summarizer validates schedules, metadata, hashes, timing stages, and
+correctness markers before writing per-run CSVs, summaries, speedups, and an
+input manifest. See [native experiment details](native/README.md) and
+[the result policy](native/results/README.md).
+
+## Security estimates and BFV checks
+
+After preparing the native source and installing SageMath 9.5:
+
+```bash
+make security-setup
+python3 native/security/model_audit.py \
+  --cache native/cache/security --project-root . \
+  --output native/results/security/paper-model-rerun --jobs 8
+PIR_BFV_TEST_RUNS=10 native/scripts/run-bfv-parameter-test.sh
+```
+
+Choose a **new output directory** for every model-audit run. The fixed-model
+assessment is classical and single-target, with explicit attack selections and
+cost conventions. Its reported minimum is 128.14 bits after rounding down;
+this is separate from the statistical verification bound.
+
+The BFV test checks a specific response-block workload. Passing it does not
+replace a correctness proof or validate every database/profile combination.
+The older `make security-audit` interface is a separate assessment path,
+not an alias for the manuscript's fixed-model audit.
+
+## Repository contents and artifact availability
+
+| Path | Contents |
+|---|---|
+| `native/patches/` | Complete patch against the pinned upstream |
+| `native/manifests/` | Frozen paper parameters, checksums, and upstream lock |
+| `native/experiments/` | Configuration, scheduling, parsing, and tests |
+| `native/scripts/` | Source preparation, builds, runs, and assessment entrypoints |
+| `native/security/` | Estimator configuration, drivers, tests, and model notes |
+| `native/baselines/` | Source-paper values for qualified cross-hardware reference |
+| `native/tools/`, `native/toolchain/` | Pinned Bazel binary and Eigen archive |
+| `docs/UPSTREAMS.md` | Source provenance and upstream license information |
+
+**The Git checkout does not contain the archived paper logs or generated
+security reports.** Vendored sources, caches, build outputs, raw logs, and
+generated report directories are excluded by `.gitignore`. Reproduction
+commands populate these paths locally.
+
+Historical paths mentioned in the detailed documentation, such as
+`native/results/security/paper-model-20260916/`, identify evidence retained
+on the experiment machine; they are not downloadable files in this checkout.
+The frozen manifest also records hashes of historical security evidence.
+Those records are provenance references, not evidence bundled by this Git push.
+
+Do not relabel older measurements with a new manifest or overwrite historical
+evidence. New executions receive new schedules, logs, and output directories.
+
+## Attribution
+
+The protocol framework comes from Rathee, Lee, and Popa's SCvPIR work.
+Structured hint generation follows the negacyclic/NTT approach used by
+[YPIR](https://github.com/menonsamir/ypir). This repository integrates the
+structured path across SCvPIR's coupled products and provides the experiment
+harness described above.
+
+Upstream components retain their original license notices. See
+[upstream provenance](docs/UPSTREAMS.md) for the BSD, MIT, and Apache-2.0
+components.

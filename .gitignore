@@ -15,3 +15,6 @@ native/logs/
 PIR_relatedworks/
 native/results/512mib/
 native/results/1gib/
+native/results/security/
+native/results/paper-v1/
+*.Zone.Identifier
