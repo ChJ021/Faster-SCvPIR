@@ -74,5 +74,3 @@ prepare_snapshot small-client "$SMALL_CLIENT_ESTIMATOR_COMMIT" \
   "$SMALL_CLIENT_ESTIMATOR_SHA256"
 prepare_snapshot ypir "$YPIR_ESTIMATOR_COMMIT" \
   "$YPIR_ESTIMATOR_SHA256"
-prepare_snapshot modern "$MODERN_ESTIMATOR_COMMIT" \
-  "$MODERN_ESTIMATOR_SHA256"
