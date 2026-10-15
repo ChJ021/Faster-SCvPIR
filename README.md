@@ -122,9 +122,6 @@ non-paper diagnostic run, use the paper runner's 4 MiB smoke profile:
 make paper-run SIZE=smoke PROFILE=negacyclic-both
 ```
 
-This differs from the original upstream's 2 MiB default used by
-`make native-smoke`.
-
 | Paper layout | Minimum available memory | Recommended available memory |
 |---|---:|---:|
 | 256 MiB | 8 GiB | 12 GiB |
@@ -153,8 +150,7 @@ make paper-summarize SESSION_ID=matrix-...
 
 The summarizer validates schedules, metadata, hashes, timing stages, and
 correctness markers before writing per-run CSVs, summaries, speedups, and an
-input manifest. See [native experiment details](native/README.md) and
-[the result policy](native/results/README.md).
+input manifest. See [the result policy](native/results/README.md).
 
 ## Security estimates and BFV checks
 
@@ -175,8 +171,6 @@ this is separate from the statistical verification bound.
 
 The BFV test checks a specific response-block workload. Passing it does not
 replace a correctness proof or validate every database/profile combination.
-The older `make security-audit` interface is a separate assessment path,
-not an alias for the manuscript's fixed-model audit.
 
 ## Repository contents and artifact availability
 
