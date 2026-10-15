@@ -117,10 +117,6 @@ pir_resolve_bazel() {
     candidate="$BAZEL_BIN"
   elif [[ -x "$PIR_NATIVE_ROOT/tools/bazel-$PIR_BAZEL_VERSION" ]]; then
     candidate="$PIR_NATIVE_ROOT/tools/bazel-$PIR_BAZEL_VERSION"
-  elif [[ -x "$PIR_NATIVE_ROOT/tools/bazel-$PIR_BAZEL_VERSION-linux-x86_64" ]]; then
-    candidate="$PIR_NATIVE_ROOT/tools/bazel-$PIR_BAZEL_VERSION-linux-x86_64"
-  elif [[ -x "$PIR_NATIVE_ROOT/tools/bazelisk" ]]; then
-    candidate="$PIR_NATIVE_ROOT/tools/bazelisk"
   else
     pir_die "project-local Bazel not found; install Bazel $PIR_BAZEL_VERSION under $PIR_NATIVE_ROOT/tools"
   fi
@@ -194,7 +190,6 @@ pir_print_context() {
   printf 'upstream=%s\n' "$PIR_UPSTREAM_URL"
   printf 'commit=%s\n' "$PIR_UPSTREAM_COMMIT"
   printf 'target=%s\n' "$PIR_TARGET"
-  printf 'profile=honest-h-smoke-2mib\n'
   printf 'bazel_version=%s\n' "$PIR_BAZEL_VERSION"
   printf 'bazel_jobs=%s\n' "$PIR_BAZEL_JOBS"
   printf 'bzlmod=false\n'

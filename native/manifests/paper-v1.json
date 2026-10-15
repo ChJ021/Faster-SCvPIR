@@ -28,27 +28,6 @@
       "error_variance": 8
     }
   },
-  "security_evidence": {
-    "claim": "parameter-screen-only-not-a-cryptographic-audit",
-    "target_bits": 128,
-    "sis_and_lwe_reference": {
-      "source": "native/results/security/validation-1gib-all/evidence.json",
-      "sha256": "7b6fcab7bacfc616dc73fef190cf8a3b69b1b0a101abdf5eaa5dd82fb6c16d7d",
-      "note": "SIS/LWE/RLWE estimates only; its superseded BFV parameter result is not reused"
-    },
-    "observed_minimum_bits": {
-      "dense_main_lwe": 146.31885261679065,
-      "dense_honest_h_sis": 146.584,
-      "structured_main_rlwe": 217.857708758827,
-      "structured_main_ring_module_sis": 243.528,
-      "dense_offline_lwe": 181.01089284368248,
-      "structured_offline_rlwe": 273.85943570625784,
-      "fhe_bfv_full_suite_paper_estimator": 128.15,
-      "fhe_bfv_full_suite_modern_control": 128.07
-    },
-    "structured_sis_status": "screen-pass-conditional-on-paper-reduction",
-    "bfv_status": "screen-pass-minimal-margin"
-  },
   "profiles": {
     "dense": {
       "legacy_alias": "baseline",

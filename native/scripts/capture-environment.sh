@@ -13,7 +13,7 @@ pir_require_command lscpu
 pir_require_command dpkg-query
 
 readonly RUN_ID="$(pir_run_id)"
-readonly ENV_LOG="$PIR_NATIVE_ROOT/manifests/environment-$RUN_ID.txt"
+readonly ENV_LOG="$PIR_LOG_DIR/environment-$RUN_ID.txt"
 readonly TEST_BINARY="$PIR_BAZEL_ROOT/symlinks/bazel-bin/hintless_simplepir/new_pir_test"
 
 {

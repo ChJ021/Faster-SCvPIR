@@ -12,9 +12,6 @@ native/vendor/
 native/build/
 native/cache/
 native/logs/
-PIR_relatedworks/
-native/results/512mib/
-native/results/1gib/
-native/results/security/
-native/results/paper-v1/
+native/results/*
+!native/results/README.md
 *.Zone.Identifier
