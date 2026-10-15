@@ -6,15 +6,12 @@ QUERY_INDEX ?=
 REPETITIONS ?=
 ORDER_SEED ?=
 CPU_SET ?=
-SECURITY_CONFIG ?= native/security/configs/1gib.json
-SECURITY_PROFILES ?= all
-SECURITY_MODE ?= audit
-SECURITY_METHOD ?= full
+
 
 QUERY_ARG := $(if $(QUERY_INDEX),--query-index=$(QUERY_INDEX),)
 CPU_ARG := $(if $(CPU_SET),--cpu-set=$(CPU_SET),)
 
-.PHONY: help check paper-validate paper-test paper-dry-run paper-build paper-run paper-matrix paper-summarize native-verify native-build native-list-tests native-smoke native-env security-setup security-audit security-calibrate security-test security-bfv-test
+.PHONY: help check paper-validate paper-test paper-dry-run paper-build paper-run paper-matrix paper-summarize native-verify native-env security-setup security-test security-bfv-test
 
 help:
 	@printf '%s\n' \
@@ -58,26 +55,11 @@ paper-summarize:
 native-verify:
 	native/scripts/verify-upstream.sh
 
-native-build:
-	native/scripts/build.sh
-
-native-list-tests:
-	native/scripts/list-tests.sh
-
-native-smoke:
-	native/scripts/run-smoke.sh
-
 native-env:
 	native/scripts/capture-environment.sh
 
 security-setup:
 	native/scripts/setup-security-estimator.sh
-
-security-audit:
-	native/scripts/run-security-audit.sh --config $(SECURITY_CONFIG) --profiles $(SECURITY_PROFILES) --mode $(SECURITY_MODE) --method $(SECURITY_METHOD)
-
-security-calibrate:
-	native/scripts/run-security-calibration.sh
 
 security-test:
 	python3 -m unittest discover -s native/security/tests -v
