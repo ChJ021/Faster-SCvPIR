@@ -1,7 +1,7 @@
 """Parameter derivation and proof-bound checks for the native PIR profiles.
 
 This module deliberately contains no Sage imports.  It can be tested with the
-system Python while ``sage_worker.py`` isolates the version-sensitive Lattice
+system Python while ``model_worker.py`` isolates the version-sensitive Lattice
 Estimator API.
 """
 
