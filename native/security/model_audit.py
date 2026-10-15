@@ -2,7 +2,7 @@
 """Audit a DECLARED classical lattice-attack model, not all cryptanalysis.
 
 Run with system Python; each isolated estimator runs under SageMath 9.5.
-Existing audits/caches are not changed or reused. See MODEL_README.md.
+Estimator results are evaluated afresh. See README.md in this directory.
 """
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed

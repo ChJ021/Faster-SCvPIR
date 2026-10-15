@@ -7,13 +7,13 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from model_audit import assessment, instances
-from model_worker import run_request
+from native.security.model_audit import assessment, instances
+from native.security.model_worker import run_request
 
 
 class ModelAuditTests(unittest.TestCase):
     def setUp(self):
-        self.config = json.loads((Path(__file__).parent / "configs/1gib.json").read_text())
+        self.config = json.loads((Path(__file__).parents[1] / "configs/1gib.json").read_text())
 
     def test_fail_closed(self):
         self.assertEqual(assessment({}), "INCONCLUSIVE")
