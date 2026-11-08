@@ -5393,3 +5393,40 @@ index 7cf9c3e..5224653 100644
 -}
 \ No newline at end of file
 +}
+
+diff --git a/verisimplepir/BUILD b/verisimplepir/BUILD
+index 9a1937b..15a5359 100644
+--- a/verisimplepir/BUILD
++++ b/verisimplepir/BUILD
+@@ -14,12 +14,13 @@ cc_library(
+         "-std=c++17",
+         "-fPIC",
+         "-O3",
+-        "-maes",
+-        "-msse4",
+         "-Wall",
+         "-fno-omit-frame-pointer",
+         "-Wno-ignored-attributes",
+-    ],
++    ] + select({
++        "@platforms//cpu:x86_64": ["-maes", "-msse4"],
++        "//conditions:default": [],
++    }),
+     includes = [
+         "src/lib",
+         "test",
+diff --git a/verisimplepir/src/lib/math/block.h b/verisimplepir/src/lib/math/block.h
+index 73ad5b1..16e26a1 100644
+--- a/verisimplepir/src/lib/math/block.h
++++ b/verisimplepir/src/lib/math/block.h
+@@ -3,8 +3,10 @@
+ #include <cstdint>
+ #include <array>
+ #include <iostream>
++#ifdef OC_ENABLE_SSE2
+ #include <emmintrin.h>
+ #include <smmintrin.h>
++#endif
+ 
+ 
+ namespace osuCrypto
