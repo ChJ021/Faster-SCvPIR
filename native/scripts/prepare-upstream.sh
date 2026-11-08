@@ -50,10 +50,21 @@ eigen_archive_sha256="$(sha256sum "$PIR_EIGEN_ARCHIVE")"
 eigen_archive_sha256="${eigen_archive_sha256%% *}"
 [[ "$eigen_archive_sha256" == "$PIR_EIGEN_SHA256" ]] \
   || pir_die "Eigen archive checksum mismatch: expected $PIR_EIGEN_SHA256, got $eigen_archive_sha256"
-if [[ ! -f "$PIR_EIGEN_DIR/BUILD.bazel" || ! -f "$PIR_EIGEN_DIR/WORKSPACE.bazel" ]]; then
+if [[ ! -d "$PIR_EIGEN_DIR" ]]; then
   [[ ! -e "$PIR_EIGEN_DIR" ]] \
     || pir_die "Eigen destination exists but is incomplete: $PIR_EIGEN_DIR"
   unzip -q "$PIR_EIGEN_ARCHIVE" -d "$PIR_NATIVE_ROOT/vendor"
+fi
+
+# The upstream archive is plain Eigen source; Bazel needs a repository marker
+# and a BUILD file. Reuse the build definition shipped with the upstream
+# workspace instead of committing generated files.
+if [[ ! -f "$PIR_EIGEN_DIR/BUILD.bazel" ]]; then
+  install -m 0644 "$PIR_UPSTREAM_DIR/bazel/eigen.bzl" "$PIR_EIGEN_DIR/BUILD.bazel"
+fi
+if [[ ! -f "$PIR_EIGEN_DIR/WORKSPACE.bazel" ]]; then
+  printf 'workspace(name = "com_gitlab_libeigen_eigen_local")\n' \
+    > "$PIR_EIGEN_DIR/WORKSPACE.bazel"
 fi
 
 printf 'upstream_commit=%s\n' "$actual_commit"
