@@ -5430,3 +5430,21 @@ index 73ad5b1..16e26a1 100644
  
  
  namespace osuCrypto
+diff --git a/verisimplepir/src/lib/math/backend.h b/verisimplepir/src/lib/math/backend.h
+index 70e2bc6..9b0e675 100644
+--- a/verisimplepir/src/lib/math/backend.h
++++ b/verisimplepir/src/lib/math/backend.h
+@@ -90,7 +90,13 @@ namespace lbcrypto
+     typedef std::vector<double> fv32;
+     typedef long double fl64;
+     typedef std::vector<fl64> fv64;
++#if defined(__SIZEOF_FLOAT128__) || defined(__FLOAT128__)
+     typedef __float128 fl128;
++#else
++    // Targets such as aarch64 have no __float128 keyword; long double is
++    // IEEE binary128 there, so it is the equivalent 128-bit type.
++    typedef long double fl128;
++#endif
+     // typedef float128 fl128;
+     typedef std::vector<fl128> fv128;
+ 
