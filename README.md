@@ -20,11 +20,13 @@ not prove these protocol assumptions.
 
 ## Requirements
 
-- Linux x86-64, Python 3.10+, GNU Make, Bash, Git and standard Linux utilities.
+- Linux x86-64 or aarch64 (64-bit Raspberry Pi OS), Python 3.10+, GNU Make,
+  Bash, Git and standard Linux utilities.
 - Native builds: Clang with C++17 support, unzip, pkg-config, OpenSSL and GSL
   development headers; see the pinned upstream Dockerfile for system packages.
 - Bazel 6.5.0 and Eigen 3.4.0 are included in `native/tools/` and
-  `native/toolchain/sources/`.
+  `native/toolchain/sources/`. The bundled Bazel binary is x86-64; on other
+  architectures set `BAZEL_BIN` to a matching Bazel 6.5.0 executable.
 - Security estimates additionally require SageMath **9.5**.
 - First-time preparation and builds require network access for dependencies.
 
@@ -43,6 +45,24 @@ make native-verify
 or native builds. The dry run writes a schedule for all 20 layout/profile
 combinations without executing experiments. Source preparation reconstructs the
 pinned upstream with the checked patch and Eigen archive.
+
+### ARM64 / Raspberry Pi
+
+The source patch supports aarch64; the platform-specific flags in the vendored
+sources are gated on x86-64. Because the bundled Bazel is an x86-64 binary, a
+64-bit Pi must select its own Bazel explicitly:
+
+```bash
+export BAZEL_BIN="$(command -v bazel)"
+bazel --version   # must report 6.5.0
+```
+
+On the x86-64 reference host the 256 MiB layout peaks near 4.5 GiB of resident
+memory, so an 8 GiB board needs `PIR_ALLOW_LOW_MEMORY=1`. The 512 MiB layout
+peaks near 7 GiB and is only practical on a 16 GiB model. On a Pi 5 the first
+dependency build takes roughly one to three hours, and single-case runs are
+more practical than the 100-cell matrix. Timings measured on ARM are not
+comparable with the paper's x86-64 reference values.
 
 ## Performance experiment
 
