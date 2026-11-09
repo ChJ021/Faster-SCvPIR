@@ -969,9 +969,29 @@ index 9268550..ab76f90 100644
    ClientState state_;
    ClientStateNew state_new_;
 diff --git a/hintless_simplepir/database_hwy.cc b/hintless_simplepir/database_hwy.cc
-index 9349aeb..e8b18ac 100644
+index 9349aeb..fe407b5 100644
 --- a/hintless_simplepir/database_hwy.cc
 +++ b/hintless_simplepir/database_hwy.cc
+@@ -279,7 +279,7 @@ static inline std::pair<Database::RawMatrix, Database::RawMatrix> CreateFastRawM
+     }
+   }
+ 
+-  return make_pair(matrix, matrix_transpose);
++  return std::make_pair(std::move(matrix), std::move(matrix_transpose));
+ }
+ 
+ 
+@@ -452,8 +452,8 @@ absl::StatusOr<std::unique_ptr<Database>> Database::CreateFast(
+     auto mats =
+         CreateFastRawMatrixWithTranspose(parameters.db_rows, parameters.db_cols,
+                               db_record_bits);
+-    data_matrices[i] = mats.first;
+-    data_matrices_transpose[i] = mats.second;
++    data_matrices[i] = std::move(mats.first);
++    data_matrices_transpose[i] = std::move(mats.second);
+     hint_matrices[i] =
+         CreateZeroMatrix(parameters.db_rows, parameters.lwe_secret_dim);
+   }
 @@ -511,7 +511,7 @@ absl::Status Database::UpdateHints() {
      }
      std::cout << std::endl;
@@ -1830,7 +1850,7 @@ index 0000000..7916959
 +}  // namespace hintless_simplepir
 +}  // namespace hintless_pir
 diff --git a/hintless_simplepir/new_pir_test.cc b/hintless_simplepir/new_pir_test.cc
-index 0a20957..65e505a 100644
+index 0a20957..986726c 100644
 --- a/hintless_simplepir/new_pir_test.cc
 +++ b/hintless_simplepir/new_pir_test.cc
 @@ -17,7 +17,11 @@
@@ -1991,7 +2011,7 @@ index 0a20957..65e505a 100644
    // Server global preprocessing #1 (only main hint, i.e. overall LWE instance, and RLWE part) time
    dict[GLOBAL_PREPR_S] += (end-start)/1000;
  
-@@ -214,12 +266,24 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+@@ -214,35 +266,35 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
    start = currentDateTime();
    ASSERT_OK_AND_ASSIGN(auto client, Client::Create(kParameters, public_params));
    end = currentDateTime();
@@ -2013,15 +2033,24 @@ index 0a20957..65e505a 100644
    // Get A, H for VSPIR
  
 -  start = currentDateTime();
+-  // Get D, A, H from Hintless
 +  const double bridge_main_start = currentDateTime();
 +  start = bridge_main_start;
-   // Get D, A, H from Hintless
++  // Get A, H from Hintless. The database stays in its packed column form:
++  // the protocol never reads an expanded uint32 copy of D, and materializing
++  // one costs four bytes per database cell (1 GiB for the 256 MiB layout).
    int num_shards = database->Data().size();
-   auto D_raw_vec = database->Data();
-@@ -233,16 +297,13 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
-     lwe::Matrix D = ExportRawMatrix(D_raw_vec[i], kParameters.db_rows, bits_for_db_mask);
-     D_vec.push_back(D);
-   }
+-  auto D_raw_vec = database->Data();
+-  std::vector<lwe::Matrix> D_vec;
+-  D_vec.reserve(num_shards);
+-  int bits_for_db_mask = kParameters.db_record_bit_size;
+-  if (bits_for_db_mask > kParameters.lwe_plaintext_bit_size) {
+-    bits_for_db_mask = kParameters.lwe_plaintext_bit_size; // smaller of the two
+-  }
+-  for (int i = 0; i < num_shards; i++) {
+-    lwe::Matrix D = ExportRawMatrix(D_raw_vec[i], kParameters.db_rows, bits_for_db_mask);
+-    D_vec.push_back(D);
+-  }
 -  const lwe::Matrix* A1_ref = database->LweQueryPad();
 -  auto A1 = ImportLweMatrix(*A1_ref);
 -  auto H_vec = database->Hints();
@@ -2040,7 +2069,7 @@ index 0a20957..65e505a 100644
    std::vector<VMatrix> H_vsp_vec;
    H_vsp_vec.reserve(num_shards);
    for (int i = 0; i < num_shards; i++) {
-@@ -253,39 +314,64 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+@@ -253,69 +305,118 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
    // Main (overall LWE instance) hint size (MB)
    dict[HINT_MB] += (H_vsp_vec.size() * H_vsp_vec[0].rows * H_vsp_vec[0].cols * sizeof(Elem))/(1ULL << 20);
    end = currentDateTime();
@@ -2121,8 +2150,18 @@ index 0a20957..65e505a 100644
    std::vector<Matrix64> H_2_vec;
    H_2_vec.reserve(num_shards);
    for (int i = 0; i < num_shards; i++) {
-@@ -294,28 +380,46 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
-     H_2_vec.push_back(H_2);
+-    Matrix64 H_2(col_in, offline_lattice_n_in);
+-	  convertToVeriSimplePIRMatrixRowFormIn64(H_2, H_2_hintless_vec[i]);
+-    H_2_vec.push_back(H_2);
++    // Construct the row form in place: Matrix64 has no destructor, so a
++    // temporary plus push_back copy would both be leaked in addition to the
++    // stored matrix.
++    H_2_vec.emplace_back(col_in, offline_lattice_n_in);
++    convertToVeriSimplePIRMatrixRowFormIn64(H_2_vec.back(),
++                                            H_2_hintless_vec[i]);
++    // The hintless column form is dead after this conversion. Release it so
++    // two full copies of H_2 are not held through the online phase.
++    std::vector<Database::LweVector64>().swap(H_2_hintless_vec[i]);
    }
    end = currentDateTime();
 +  PrintStage0Timing("global", "bridge_convert_offline_H2", start, end);
@@ -2172,7 +2211,7 @@ index 0a20957..65e505a 100644
    std::vector<std::vector<Matrix64>> preproc_res_cts_vec;
    preproc_res_cts_vec.reserve(num_shards);
    for (int i = 0; i < num_shards; i++) {
-@@ -323,8 +427,11 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+@@ -323,8 +424,11 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
      preproc_res_cts_vec.push_back(preproc_res_cts);
    }
    end = currentDateTime();
@@ -2185,7 +2224,7 @@ index 0a20957..65e505a 100644
    // Server offline response size (KB)
    dict[OFFLINE_DOWN_KB] += (preproc_res_cts_vec.size() * preproc_res_cts_vec[0].size() * preproc_res_cts_vec[0][0].rows * preproc_res_cts_vec[0][0].cols * sizeof(Elem64))/(1ULL << 10);
  
-@@ -337,6 +444,7 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+@@ -337,6 +441,7 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
      Z_vec.push_back(Z);
    }
    end = currentDateTime();
@@ -2193,7 +2232,7 @@ index 0a20957..65e505a 100644
    // Client decrypting Z time
    dict[CLIENT_PREPR_S] += (end-start)/1000;
  
-@@ -358,26 +466,35 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+@@ -358,26 +463,35 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
      RZ_vec.push_back(RZ);
    }
    end = currentDateTime();
@@ -2233,7 +2272,7 @@ index 0a20957..65e505a 100644
    dict[LONG_TERM_STATE_KB] += (RZ_vec.size() * RZ_vec[0].rows * RZ_vec[0].cols * sizeof(Elem))/(1ULL << 10);
  
    // Query-level preprocessing/prepare + online phase
-@@ -392,7 +509,9 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+@@ -392,7 +506,9 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
    start = currentDateTime();
    ASSERT_OK_AND_ASSIGN(auto As_s_tuple, client->Compute_A_times_s());
    end = currentDateTime();
@@ -2244,7 +2283,7 @@ index 0a20957..65e505a 100644
    dict[CLIENT_PREP_PRE_S] += (end-start)/1000;
  
    auto As_vsp = std::get<0>(As_s_tuple);
-@@ -402,7 +521,7 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+@@ -402,7 +518,7 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
    // Size of of A*s
    dict[ONLINE_STATE_KB] += (As_vsp.rows * As_vsp.cols * sizeof(Elem))/(1ULL << 10);
    // Size of of s_lwe
@@ -2253,7 +2292,7 @@ index 0a20957..65e505a 100644
  
    // Prepare RLWE parts
    // Client's RLWE request
-@@ -413,6 +532,7 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+@@ -413,6 +529,7 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
    ASSERT_OK_AND_ASSIGN(auto prepare_req, client->PrepareLinPirGivenS(s_lwe));
  #endif //BSGS
    end = currentDateTime();
@@ -2261,7 +2300,7 @@ index 0a20957..65e505a 100644
    // Client prepare req gen time
    dict[CLIENT_PREP_PRE_S] += (end-start)/1000;
    // Client prepare request KB
-@@ -423,11 +543,12 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+@@ -423,11 +540,12 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
    // Server's RLWE response
    start = currentDateTime();
  #ifdef BSGS
@@ -2275,7 +2314,7 @@ index 0a20957..65e505a 100644
    // Server prepare response time (LinPir H*s compute time)
    dict[SERVER_PREP_S] += (end-start)/1000;
    // Server prepare response KB
-@@ -439,13 +560,14 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+@@ -439,13 +557,14 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
    start = currentDateTime();
    ASSERT_OK_AND_ASSIGN(auto hs_vec, client->RecoverHsPreparePhase(prepare_response));
    end = currentDateTime();
@@ -2291,7 +2330,7 @@ index 0a20957..65e505a 100644
    dict[ONLINE_STATE_KB] += (RC.rows * RC.cols * sizeof(Elem))/(1ULL << 10);
  
    //std::cout << "Doing verification: H*s as part of prepare phase" << std::endl;
-@@ -458,24 +580,27 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+@@ -458,24 +577,27 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
      pir.HsVerifyCompressed(As_vsp, h_times_s, RZ_vec[i], RC);
    }
    end2 = currentDateTime();
@@ -2321,7 +2360,7 @@ index 0a20957..65e505a 100644
    auto request = request_and_query.first;
  	auto query = request_and_query.second;
    // Client online request (LWE only) KB
-@@ -489,9 +614,10 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+@@ -489,9 +611,10 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
    start2 = currentDateTime();
    ASSERT_OK_AND_ASSIGN(auto response, server->HandleRequestSkipLinPir(request));
    end2 = currentDateTime();
@@ -2333,7 +2372,7 @@ index 0a20957..65e505a 100644
    dict[QUERY_DOWN_KB] += (response.ByteSizeLong() / 1024);
    // Client response from server (D*u) size
    dict[ONLINE_STATE_KB] += (response.ByteSizeLong() / 1024);
-@@ -500,6 +626,7 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+@@ -500,6 +623,7 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
    start = currentDateTime();
    ASSERT_OK_AND_ASSIGN(auto rec_v, client->RecoverRecordAndGiveV(response, hs_vec));
    end = currentDateTime();
@@ -2341,7 +2380,7 @@ index 0a20957..65e505a 100644
    // Client record recovery time (given precomputed Hs)
    dict[CLIENT_Q_DEC_MS] += (end-start);
  
-@@ -515,6 +642,7 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+@@ -515,6 +639,7 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
    }
    //std::cout << "Online verification done for all shards" << std::endl;
    end = currentDateTime();
@@ -2349,7 +2388,7 @@ index 0a20957..65e505a 100644
    // Client online verification time (only D*u)
    dict[CLIENT_Q_VER_MS] += (end-start);
  #endif //SH_RUN
-@@ -523,8 +651,10 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+@@ -523,8 +648,10 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
    std::cout << BLUE << "[==> TIMER  <==] Query-level preprocessing + online time: " << (end_on-start_on) << " ms | " << (end_on-start_on)/1000 << " sec" << END << std::endl;
  
    end_online = currentDateTime();
@@ -2361,7 +2400,7 @@ index 0a20957..65e505a 100644
    if (kParameters.db_stack_cells > 1) { // Stacking
      ASSERT_OK_AND_ASSIGN(auto expected, database->RecordWithStacking(index));
      EXPECT_EQ(record, expected);
-@@ -534,11 +664,11 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+@@ -534,11 +661,11 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
      EXPECT_EQ(record, expected);
    }
    std::cout << "End-to-end test done." << std::endl;
@@ -2375,7 +2414,7 @@ index 0a20957..65e505a 100644
                                   kParameters.lwe_plaintext_bit_size << " and Stacks: " << kParameters.db_stack_cells << std::endl;
    for (auto it : dict) {
      std::cout << it.first << " : " << it.second << std::endl;
-@@ -550,3 +680,252 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
+@@ -550,3 +677,252 @@ TEST(HintlessSimplePir, EndToEndPIRTest) {
  }  // namespace hintless_simplepir
  
  }  // namespace hintless_pir
