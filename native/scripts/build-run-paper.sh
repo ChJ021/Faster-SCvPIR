@@ -22,7 +22,7 @@ Usage: native/scripts/build-run-paper.sh --size=SIZE [OPTIONS]
 Run one cell of the frozen honest-authenticated-hint paper-v1 experiment.
 
 Required:
-  --size=smoke|256mib|512mib|1gib|2gib|4gib
+  --size=smoke|128mib|256mib|512mib|1gib|2gib|4gib
 
 Profiles:
   --preproc-profile=dense

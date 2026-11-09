@@ -22,6 +22,7 @@ class PaperConfigTest(unittest.TestCase):
 
     def test_frozen_near_square_layouts(self) -> None:
         expected = {
+            "128mib": (8192, 16384, 128 << 20, 8, 2),
             "256mib": (16384, 16384, 256 << 20, 8, 4),
             "512mib": (32768, 16384, 512 << 20, 8, 8),
             "1gib": (32768, 32768, 1 << 30, 16, 8),
@@ -63,7 +64,7 @@ class PaperConfigTest(unittest.TestCase):
         rows = balanced_rows(profiles)
         self.assertEqual(len(rows), len(profiles))
         self.assertTrue(all(set(row) == set(profiles) for row in rows))
-        for size_name in ("256mib", "512mib", "1gib", "2gib", "4gib"):
+        for size_name in ("128mib", "256mib", "512mib", "1gib", "2gib", "4gib"):
             size = self.manifest["sizes"][size_name]
             index = deterministic_query(size, 20260905, size_name, 0)
             self.assertLess(index, size["rows"] * size["columns"])

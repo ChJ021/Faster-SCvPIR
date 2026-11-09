@@ -18,7 +18,7 @@ help:
 	@printf '%s\n' \
 	  'Primary paper-v1 targets:' \
 	  '  make check                 Validate manifests and run Python tests' \
-	  '  make paper-dry-run         Resolve the full 5-size/4-profile matrix' \
+	  '  make paper-dry-run         Resolve the full 6-size/4-profile matrix' \
 	  '  make paper-build           Build the shared native binary' \
 	  '  make paper-run SIZE=1gib PROFILE=dense' \
 	  '  make paper-matrix REPETITIONS=5 ORDER_SEED=20260909 CPU_SET=2' \

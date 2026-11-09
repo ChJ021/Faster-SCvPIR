@@ -63,6 +63,19 @@
       "recommended_memory_kib": 2097152,
       "paper_layout": false
     },
+    "128mib": {
+      "rows": 8192,
+      "columns": 16384,
+      "record_bits": 8,
+      "stack_cells": 1,
+      "logical_bytes": 134217728,
+      "main_pad_blocks": 8,
+      "offline_pad_blocks": 2,
+      "minimum_memory_kib": 2097152,
+      "recommended_memory_kib": 4194304,
+      "paper_layout": false,
+      "extension_rule": "half-size continuation of the near-square series"
+    },
     "256mib": {
       "rows": 16384,
       "columns": 16384,

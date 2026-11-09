@@ -61,7 +61,7 @@ On the x86-64 reference host the 256 MiB layout peaks near 4.5 GiB of resident
 memory, so an 8 GiB board needs `PIR_ALLOW_LOW_MEMORY=1`. The 512 MiB layout
 peaks near 7 GiB and is only practical on a 16 GiB model. On a Pi 5 the first
 dependency build takes roughly one to three hours, and single-case runs are
-more practical than the 100-cell matrix. Timings measured on ARM are not
+more practical than the 120-cell matrix. Timings measured on ARM are not
 comparable with the paper's x86-64 reference values.
 
 ## Performance experiment
@@ -73,8 +73,8 @@ make paper-matrix REPETITIONS=5 ORDER_SEED=20260909 CPU_SET=2
 make paper-summarize SESSION_ID=matrix-...
 ```
 
-The smoke layout is 4 MiB. The formal matrix contains five database layouts,
-four profiles and five repetitions (100 runs). Choose an available logical CPU
+The smoke layout is 4 MiB. The formal matrix contains six database layouts,
+four profiles and five repetitions (120 runs). Choose an available logical CPU
 and use the session ID printed by the scheduler when summarizing. Formal runs
 check memory, CPU affinity and the performance governor; scripts do not change
 host settings. A single paper case can be run with
@@ -82,6 +82,7 @@ host settings. A single paper case can be run with
 
 | Layout | Minimum available memory | Recommended available memory |
 |---|---:|---:|
+| 128 MiB | 2 GiB | 4 GiB |
 | 256 MiB | 8 GiB | 12 GiB |
 | 512 MiB | 12 GiB | 16 GiB |
 | 1 GiB | 20 GiB | 32 GiB |

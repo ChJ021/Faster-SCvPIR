@@ -29,6 +29,7 @@ class SecurityModelTest(unittest.TestCase):
 
     def test_shipped_database_sizes(self) -> None:
         expected = {
+            "128mib.json": 128 << 20,
             "512mib.json": 512 << 20,
             "1gib.json": 1 << 30,
             "2gib.json": 2 << 30,

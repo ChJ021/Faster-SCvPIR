@@ -20,7 +20,7 @@ PINS = {
     "162c505": "b24fab5925443b51c9b2c734576441c7c8d5ddd77be35aa46717191bd55261f2",
     "4195c66": "c081bfd1cb3be24b78ce5a6dd8bae1350f6bec25916e02e32b2428ddced58f67",
 }
-LAYOUTS = ("256mib", "512mib", "1gib", "2gib", "4gib")
+LAYOUTS = ("128mib", "256mib", "512mib", "1gib", "2gib", "4gib")
 
 
 def digest(path):

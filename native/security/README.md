@@ -27,7 +27,7 @@ only those tests and requires neither SageMath nor a native build.
 
 ## Model
 
-The five configurations under `configs/` cover seven components per layout,
+The six configurations under `configs/` cover seven components per layout,
 with identical requests shared within an assessment:
 
 - Dense LWE and BFV: estimator `162c505`, `LWE.estimate`, explicit MATZOV/GSA,

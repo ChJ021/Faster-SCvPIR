@@ -20,7 +20,7 @@ CANONICAL_PROFILES = (
     "negacyclic-offline",
     "negacyclic-both",
 )
-FORMAL_SIZES = ("256mib", "512mib", "1gib", "2gib", "4gib")
+FORMAL_SIZES = ("128mib", "256mib", "512mib", "1gib", "2gib", "4gib")
 ALL_SIZES = ("smoke",) + FORMAL_SIZES
 FROZEN_CRYPTO = {
     "main_modulus": 4278255617,
@@ -125,10 +125,11 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     sizes = manifest.get("sizes")
     if not isinstance(sizes, dict) or set(sizes) != set(ALL_SIZES):
         raise ManifestError(
-            "sizes must contain smoke, 256mib, 512mib, 1gib, 2gib, and 4gib"
+            "sizes must contain smoke, 128mib, 256mib, 512mib, 1gib, 2gib, and 4gib"
         )
     expected_layouts = {
         "smoke": (2048, 2048, 1, 4 << 20),
+        "128mib": (8192, 16384, 1, 128 << 20),
         "256mib": (16384, 16384, 256, 256 << 20),
         "512mib": (32768, 16384, 8, 512 << 20),
         "1gib": (32768, 32768, 1, 1 << 30),
