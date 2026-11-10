@@ -80,15 +80,6 @@ check memory, CPU affinity and the performance governor; scripts do not change
 host settings. A single paper case can be run with
 `make paper-run SIZE=1gib PROFILE=negacyclic-both CPU_SET=2`.
 
-| Layout | Minimum available memory | Recommended available memory |
-|---|---:|---:|
-| 128 MiB | 2 GiB | 4 GiB |
-| 256 MiB | 8 GiB | 12 GiB |
-| 512 MiB | 12 GiB | 16 GiB |
-| 1 GiB | 20 GiB | 32 GiB |
-| 2 GiB | 32 GiB | 40 GiB |
-| 4 GiB | 52 GiB | 60 GiB |
-
 `make native-env` records the build environment under `native/logs/`.
 See [result formats](native/results/README.md) for aggregation and validation.
 
