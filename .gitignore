@@ -1,0 +1,14 @@
+.venv/
+.uv-cache/
+__pycache__/
+*.py[cod]
+*.swp
+.pytest_cache/
+.mypy_cache/
+build/
+bazel-*
+cache/
+logs/
+results/
+vendor/
+*.Zone.Identifier

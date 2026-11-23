@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "source": {
+    "title": "Verifiable PIR with Small Client Storage",
+    "authors": "Rathee, Lee, and Popa",
+    "venue": "IEEE Symposium on Security and Privacy 2026",
+    "url": "https://eprint.iacr.org/2025/1714",
+    "pdf_sha256": "3d521ba8db24f79f0b48395623507f4e91d4e6790851e04c63b33749dec93304",
+    "retrieved_utc": "2026-09-05",
+    "evaluation_section": "Section 6 and Appendix A.5",
+    "query_table": "Table 2"
+  },
+  "hardware": {
+    "instance": "Google Cloud c3-highmem-44",
+    "memory_gib": 352,
+    "processor": "Intel Sapphire Rapids",
+    "instruction_set": "AVX-512",
+    "modeled_network_mbps": 64
+  },
+  "comparison_policy": "secondary-cross-hardware-reference-only",
+  "results": {
+    "256mib": {
+      "layout": {"rows": 16384, "columns": 16384},
+      "records": {"count": 1048576, "bytes_per_record": 256},
+      "query_preparation": {"server_seconds": 0.1, "client_seconds": 1.6},
+      "online": {"server_milliseconds": 60.0, "client_milliseconds": 2.2},
+      "preparation_communication_reported_kib": {"upload": "952", "download": "896"},
+      "online_communication_kib": {"upload": 79, "download": 79},
+      "one_time_dlp_seconds": null,
+      "one_time_clp_seconds": null
+    },
+    "512mib": {
+      "layout": {"rows": 32768, "columns": 16384},
+      "records": {"count": 67108864, "bytes_per_record": 8},
+      "query_preparation": {"server_seconds": 0.3, "client_seconds": 2.6},
+      "online": {"server_milliseconds": 120.0, "client_milliseconds": 2.9},
+      "preparation_communication_reported_kib": {"upload": "952", "download": "1.8k"},
+      "online_communication_kib": {"upload": 79, "download": 158},
+      "one_time_dlp_seconds": null,
+      "one_time_clp_seconds": null
+    },
+    "1gib": {
+      "layout": {"rows": 32768, "columns": 32768},
+      "records": {"count": 1073741824, "bytes_per_record": 1},
+      "query_preparation": {"server_seconds": 0.3, "client_seconds": 5.7},
+      "online": {"server_milliseconds": 240.0, "client_milliseconds": 4.4},
+      "preparation_communication_reported_kib": {"upload": "952", "download": "1.8k"},
+      "online_communication_kib": {"upload": 157, "download": 158},
+      "one_time_dlp_seconds": {"value": 1000, "approximate": true},
+      "one_time_clp_seconds": {"value": 136, "approximate": true}
+    },
+    "2gib": {"reported_by_source": false},
+    "4gib": {"reported_by_source": false}
+  },
+  "interpretation": "Never divide local timings by these values to claim a hardware-normalized speedup. Use the local dense baseline for primary speedups."
+}

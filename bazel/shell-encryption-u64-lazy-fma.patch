@@ -1,0 +1,31 @@
+Fix the lazy-RNS 64-bit FMA kernel on narrow SIMD targets.
+
+BatchFusedMulAddMontgomeryRepHwy's Uint64 specialization regroups the
+MulEven/MulOdd products with Per4LaneBlockShuffle<3, 1, 2, 0>, which is only
+correct when a vector holds at least four 64-bit lanes. On aarch64 NEON (and
+on SSE2/SSSE3) a vector holds two 64-bit lanes, the shuffle degenerates, and
+the accumulator receives a mix of low/high halves from different coefficients.
+Every ApplyToWithRandomPad rotation (used by the LinPIR BSGS prepare phase)
+then produces garbage.
+
+Fall back to the portable scalar implementation when fewer than four 64-bit
+lanes are available. AVX2/AVX-512 and other wide targets are unaffected.
+
+--- a/shell_encryption/rns/rns_polynomial_hwy.cc
++++ b/shell_encryption/rns/rns_polynomial_hwy.cc
+@@ -110,6 +110,15 @@
+   const int N = hn::Lanes(d);
+   const int64_t num_coeffs = a.size();
+ 
++  // The vectorized code below relies on a four-lane block shuffle to regroup
++  // the 64x64->128-bit products, so it is only valid when a vector holds at
++  // least four 64-bit lanes. Narrow SIMD targets such as NEON (two lanes)
++  // and SSE2/SSSE3 (two lanes) must use the scalar implementation instead.
++  if (N < 4) {
++    BatchFusedMulAddMontgomeryRepNoHwy(a, b, output);
++    return;
++  }
++
+   // Generate the masks on the even lanes, which correspond to the lower 64 bits
+   // of BigInt64 (unsigned 128-bit int) values in the output vector.
+   uint8_t* mask_lo_bits = new uint8_t[(N + 7) / 8];

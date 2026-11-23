@@ -1,0 +1,134 @@
+{
+  "schema_version": 1,
+  "manifest_id": "paper-v1",
+  "title": "Small-Client vPIR preprocessing acceleration under honest authenticated hints",
+  "threat_model": {
+    "hint_generation": "honest",
+    "hint_authentication": "external-to-this-poc",
+    "general_h": false,
+    "network_service": false,
+    "scope": "single-process static-database experiment"
+  },
+  "cryptographic_parameters": {
+    "main_modulus": 4278255617,
+    "offline_modulus": 18014398492704769,
+    "plaintext_modulus": 256,
+    "main_lwe_dimension": 1408,
+    "offline_lwe_dimension": 2816,
+    "main_ring_degree": 2048,
+    "offline_ring_degree": 4096,
+    "main_error_variance": 8,
+    "offline_error_stddev": 6.4,
+    "fhe": {
+      "ring_degree": 4096,
+      "moduli": [19988226643746817, 19988226643402753],
+      "plaintext_modulus": 4278255617,
+      "gadget_log_bases": [13, 14],
+      "gadget_digits": 9,
+      "error_variance": 8
+    }
+  },
+  "profiles": {
+    "dense": {
+      "legacy_alias": "baseline",
+      "main_backend": "dense-lwe",
+      "offline_backend": "dense-offline"
+    },
+    "negacyclic-main": {
+      "legacy_alias": "ypir-main",
+      "main_backend": "ypir-exact-ntt",
+      "offline_backend": "dense-offline"
+    },
+    "negacyclic-offline": {
+      "legacy_alias": "distpir-offline",
+      "main_backend": "dense-lwe",
+      "offline_backend": "ypir-offline-exact-ntt"
+    },
+    "negacyclic-both": {
+      "legacy_alias": "hybrid",
+      "main_backend": "ypir-exact-ntt",
+      "offline_backend": "ypir-offline-exact-ntt"
+    }
+  },
+  "sizes": {
+    "128mib": {
+      "rows": 8192,
+      "columns": 16384,
+      "record_bits": 8,
+      "stack_cells": 1,
+      "logical_bytes": 134217728,
+      "offline_ring_degree": 4096,
+      "main_pad_blocks": 8,
+      "offline_pad_blocks": 2,
+      "minimum_memory_kib": 2097152,
+      "recommended_memory_kib": 4194304
+    },
+    "256mib": {
+      "rows": 16384,
+      "columns": 16384,
+      "record_bits": 8,
+      "stack_cells": 256,
+      "logical_bytes": 268435456,
+      "offline_ring_degree": 4096,
+      "main_pad_blocks": 8,
+      "offline_pad_blocks": 4,
+      "minimum_memory_kib": 8388608,
+      "recommended_memory_kib": 12582912
+    },
+    "512mib": {
+      "rows": 32768,
+      "columns": 16384,
+      "record_bits": 8,
+      "stack_cells": 8,
+      "logical_bytes": 536870912,
+      "offline_ring_degree": 4096,
+      "main_pad_blocks": 8,
+      "offline_pad_blocks": 8,
+      "minimum_memory_kib": 12582912,
+      "recommended_memory_kib": 16777216
+    },
+    "1gib": {
+      "rows": 32768,
+      "columns": 32768,
+      "record_bits": 8,
+      "stack_cells": 1,
+      "logical_bytes": 1073741824,
+      "offline_ring_degree": 4096,
+      "main_pad_blocks": 16,
+      "offline_pad_blocks": 8,
+      "minimum_memory_kib": 20971520,
+      "recommended_memory_kib": 33554432
+    },
+    "2gib": {
+      "rows": 65536,
+      "columns": 32768,
+      "record_bits": 8,
+      "stack_cells": 32,
+      "logical_bytes": 2147483648,
+      "offline_ring_degree": 4096,
+      "main_pad_blocks": 16,
+      "offline_pad_blocks": 16,
+      "minimum_memory_kib": 33554432,
+      "recommended_memory_kib": 41943040
+    },
+    "4gib": {
+      "rows": 65536,
+      "columns": 65536,
+      "record_bits": 8,
+      "stack_cells": 1,
+      "logical_bytes": 4294967296,
+      "offline_ring_degree": 4096,
+      "main_pad_blocks": 32,
+      "offline_pad_blocks": 16,
+      "minimum_memory_kib": 54525952,
+      "recommended_memory_kib": 62914560
+    }
+  },
+  "experiment_policy": {
+    "primary_baseline": "same-host dense",
+    "profile_order": ["dense", "negacyclic-main", "negacyclic-offline", "negacyclic-both"],
+    "formal_repetitions_recommended": 5,
+    "confidence_interval": "two-sided-95-percent-student-t",
+    "cross_paper_comparison": "secondary-cross-hardware-reference-only"
+  }
+}
