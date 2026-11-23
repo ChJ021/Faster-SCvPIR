@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Validate and expose the frozen paper-v1 experiment manifest.
 
-The manifest is the single source of truth for database layouts, memory
-floors and cryptographic parameters.  Scripts and the C++ runner derive
-their values from it; no size or layout is duplicated in code.
+The manifest is the single source of truth for database layouts and
+cryptographic parameters.  Scripts and the C++ runner derive their values
+from it; no size or layout is duplicated in code.
 """
 
 from __future__ import annotations
@@ -171,10 +171,6 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
             rows // offline_degree
         ):
             raise ManifestError(f"{name} offline_pad_blocks is inconsistent")
-        if _positive_int(size.get("minimum_memory_kib"), f"sizes.{name}.minimum_memory_kib") > _positive_int(
-            size.get("recommended_memory_kib"), f"sizes.{name}.recommended_memory_kib"
-        ):
-            raise ManifestError(f"{name} minimum memory exceeds recommended memory")
 
 
 def profile_values(manifest: dict[str, Any], size_name: str, profile_name: str) -> dict[str, str]:
@@ -205,8 +201,6 @@ def profile_values(manifest: dict[str, Any], size_name: str, profile_name: str) 
         "offline_ring_degree": str(offline_ring_degree if offline_structured else 0),
         "main_pad_blocks": str(size["main_pad_blocks"] if main_structured else 0),
         "offline_pad_blocks": str(size["offline_pad_blocks"] if offline_structured else 0),
-        "minimum_memory_kib": str(size["minimum_memory_kib"]),
-        "recommended_memory_kib": str(size["recommended_memory_kib"]),
         "default_query_index": str(size["columns"] - 4),
     }
 

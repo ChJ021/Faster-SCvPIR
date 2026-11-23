@@ -20,8 +20,6 @@ pir_print_resolved_profile() {
   printf 'main_pad_block_count=%s\n' "$MAIN_PAD_BLOCK_COUNT"
   printf 'offline_pad_block_count=%s\n' "$OFFLINE_PAD_BLOCK_COUNT"
   printf 'query_index=%s\n' "$QUERY_INDEX"
-  printf 'minimum_available_memory_kib=%s\n' "$MINIMUM_MEMORY_KIB"
-  printf 'recommended_available_memory_kib=%s\n' "$RECOMMENDED_MEMORY_KIB"
   printf 'cpu_set=%s\n' "${CPU_SET:-inherited}"
   printf 'client_main_pad_backend_lifecycle=ephemeral-per-operation\n'
   printf 'client_main_pad_backend_cached_bytes=0\n'
@@ -41,11 +39,7 @@ pir_write_context() {
     printf 'architecture=%s\n' "$(uname -m)"
     printf 'kernel=%s\n' "$(uname -sr)"
     printf 'memory_total_kib=%s\n' "$(awk '/^MemTotal:/ {print $2; exit}' /proc/meminfo)"
-    if [[ "${PIR_SKIP_MEMORY_CHECK:-0}" == "1" ]]; then
-      printf 'memory_available_kib=skipped\n'
-    else
-      printf 'memory_available_kib=%s\n' "$(effective_available_memory_kib)"
-    fi
+    printf 'memory_available_kib=%s\n' "$(effective_available_memory_kib)"
     printf 'logical_cpus=%s\n' "$(nproc)"
     printf 'cpu_model=%s\n' "$(awk -F: '/^model name/ {sub(/^[[:space:]]+/, "", $2); print $2; exit}' /proc/cpuinfo)"
     printf 'cpu_microcode=%s\n' "$(awk -F: '/^microcode/ {sub(/^[[:space:]]+/, "", $2); print $2; exit}' /proc/cpuinfo)"
@@ -61,8 +55,6 @@ pir_write_context() {
     printf 'bazel_version=%s\n' "$PIR_BAZEL_VERSION"
     printf 'bazel_jobs=%s\n' "$PIR_BAZEL_JOBS"
     printf 'formal_run=%s\n' "${PIR_FORMAL_RUN:-0}"
-    printf 'low_memory_override=%s\n' "${PIR_ALLOW_LOW_MEMORY:-0}"
-    printf 'memory_check_skipped=%s\n' "${PIR_SKIP_MEMORY_CHECK:-0}"
     printf 'unstable_cpu_override=%s\n' "${PIR_ALLOW_UNSTABLE_CPU:-0}"
     printf 'highway_mode=%s\n' "$([[ "${PIR_SCALAR:-0}" == "1" ]] && printf scalar || printf native-dispatch)"
   } >"$output_file"

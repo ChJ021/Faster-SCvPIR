@@ -55,26 +55,17 @@ make paper-matrix REPETITIONS=5 ORDER_SEED=20260909 CPU_SET=2
 make paper-summarize SESSION_ID=matrix-...
 ```
 
-Sizes, row/column layouts, record widths, stacking, ring degrees and memory
-floors live in `manifests/paper-v1.json`; the manifest checksum is verified on
-every run. The runner receives the geometry through `--db-rows`,
-`--db-columns`, `--db-record-bits` and `--db-stack-cells`, so no C++ size table
-needs to be kept in sync.
-
-| Layout | Minimum available memory | Recommended available memory |
-|---|---:|---:|
-| 128 MiB | 2 GiB | 4 GiB |
-| 256 MiB | 8 GiB | 12 GiB |
-| 512 MiB | 12 GiB | 16 GiB |
-| 1 GiB | 20 GiB | 32 GiB |
-| 2 GiB | 32 GiB | 40 GiB |
-| 4 GiB | 52 GiB | 60 GiB |
+Sizes, row/column layouts, record widths, stacking and ring degrees live in
+`manifests/paper-v1.json`; the manifest checksum is verified on every run. The
+runner receives the geometry through `--db-rows`, `--db-columns`,
+`--db-record-bits` and `--db-stack-cells`, so no C++ size table needs to be kept
+in sync.
 
 The matrix covers six database layouts, four profiles and the requested number
 of repetitions (120 runs for five repetitions). Formal runs require an explicit
 CPU set and the performance CPU governor; scripts never change host settings.
-Memory checks are warning-only: `PIR_ALLOW_LOW_MEMORY=1` silences the
-below-minimum warning and `PIR_SKIP_MEMORY_CHECK=1` skips measurement.
+Memory use depends on the layout, profile and host; no fixed memory threshold is
+enforced, and the run context records only the memory actually available.
 
 Raw logs are written under `logs/paper-v1/<SIZE>/<PROFILE>/<RUN_ID>/`, schedules
 under `logs/paper-v1/schedules/`, and summarized CSV outputs under

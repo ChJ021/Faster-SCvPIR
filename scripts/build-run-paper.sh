@@ -57,8 +57,6 @@ Options:
   -h, --help                  Show this help text.
 
 Environment:
-  PIR_ALLOW_LOW_MEMORY=1      Suppress the size-specific memory warning.
-  PIR_SKIP_MEMORY_CHECK=1     Skip the memory check entirely.
   PIR_FORMAL_RUN=1            Enforce stable-host checks used by the matrix runner.
   PIR_ALLOW_UNSTABLE_CPU=1    Override a non-performance CPU governor warning.
   PIR_KEEP_PROXY=1            Preserve inherited proxy variables for Bazel.

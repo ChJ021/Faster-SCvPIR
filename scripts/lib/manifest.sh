@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 
 # Resolution of one experiment cell from the frozen paper-v1 manifest.
-# Every database layout, memory floor and bound comes from the manifest;
-# nothing here duplicates a size.
+# Every database layout comes from the manifest; nothing here duplicates a size.
 
 declare -gA PAPER=()
 
@@ -13,8 +12,7 @@ pir_load_cell_config() {
   local -a required_keys=(
     manifest_id manifest_sha256 size profile rows columns record_bits stack_cells
     logical_bytes main_backend offline_backend main_ring_degree offline_ring_degree
-    main_pad_blocks offline_pad_blocks minimum_memory_kib recommended_memory_kib
-    default_query_index
+    main_pad_blocks offline_pad_blocks default_query_index
   )
 
   [[ -f "$PIR_MANIFEST" ]] || pir_die "paper-v1 manifest is missing: $PIR_MANIFEST"
@@ -49,8 +47,6 @@ pir_load_cell_config() {
   FROZEN_OFFLINE_RING_DEGREE="${PAPER[offline_ring_degree]}"
   MAIN_PAD_BLOCK_COUNT="${PAPER[main_pad_blocks]}"
   OFFLINE_PAD_BLOCK_COUNT="${PAPER[offline_pad_blocks]}"
-  MINIMUM_MEMORY_KIB="${PAPER[minimum_memory_kib]}"
-  RECOMMENDED_MEMORY_KIB="${PAPER[recommended_memory_kib]}"
   MANIFEST_SHA256="${PAPER[manifest_sha256]}"
 }
 

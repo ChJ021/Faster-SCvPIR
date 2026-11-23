@@ -59,9 +59,7 @@
       "logical_bytes": 134217728,
       "offline_ring_degree": 4096,
       "main_pad_blocks": 8,
-      "offline_pad_blocks": 2,
-      "minimum_memory_kib": 2097152,
-      "recommended_memory_kib": 4194304
+      "offline_pad_blocks": 2
     },
     "256mib": {
       "rows": 16384,
@@ -71,9 +69,7 @@
       "logical_bytes": 268435456,
       "offline_ring_degree": 4096,
       "main_pad_blocks": 8,
-      "offline_pad_blocks": 4,
-      "minimum_memory_kib": 8388608,
-      "recommended_memory_kib": 12582912
+      "offline_pad_blocks": 4
     },
     "512mib": {
       "rows": 32768,
@@ -83,9 +79,7 @@
       "logical_bytes": 536870912,
       "offline_ring_degree": 4096,
       "main_pad_blocks": 8,
-      "offline_pad_blocks": 8,
-      "minimum_memory_kib": 12582912,
-      "recommended_memory_kib": 16777216
+      "offline_pad_blocks": 8
     },
     "1gib": {
       "rows": 32768,
@@ -95,9 +89,7 @@
       "logical_bytes": 1073741824,
       "offline_ring_degree": 4096,
       "main_pad_blocks": 16,
-      "offline_pad_blocks": 8,
-      "minimum_memory_kib": 20971520,
-      "recommended_memory_kib": 33554432
+      "offline_pad_blocks": 8
     },
     "2gib": {
       "rows": 65536,
@@ -107,9 +99,7 @@
       "logical_bytes": 2147483648,
       "offline_ring_degree": 4096,
       "main_pad_blocks": 16,
-      "offline_pad_blocks": 16,
-      "minimum_memory_kib": 33554432,
-      "recommended_memory_kib": 41943040
+      "offline_pad_blocks": 16
     },
     "4gib": {
       "rows": 65536,
@@ -119,9 +109,7 @@
       "logical_bytes": 4294967296,
       "offline_ring_degree": 4096,
       "main_pad_blocks": 32,
-      "offline_pad_blocks": 16,
-      "minimum_memory_kib": 54525952,
-      "recommended_memory_kib": 62914560
+      "offline_pad_blocks": 16
     }
   },
   "experiment_policy": {

@@ -146,7 +146,6 @@ def main() -> int:
     parser.add_argument("--cpu-set")
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--allow-low-memory", action="store_true")
     parser.add_argument("--allow-unstable-cpu", action="store_true")
     args = parser.parse_args()
 
@@ -211,8 +210,6 @@ def main() -> int:
 
     env = os.environ.copy()
     env["PIR_FORMAL_RUN"] = "1"
-    if args.allow_low_memory:
-        env["PIR_ALLOW_LOW_MEMORY"] = "1"
     if args.allow_unstable_cpu:
         env["PIR_ALLOW_UNSTABLE_CPU"] = "1"
 
